@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Freebox Web Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-main: #0f141f;
+      --bg-sidebar: #151c2c;
+      --bg-header: #151c2c;
+      --bg-card: #1c2538;
+      --bg-hover: #222e44;
+      --bg-active: #293854;
+      --bg-modal: #182236;
+      --border-color: #27344d;
+      --border-light: #334464;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --folder-gold: #f59e0b;
+      --danger: #ef4444;
+      --success: #10b981;
+      --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      font-family: var(--font-main);
+      background-color: var(--bg-main);
+      color: var(--text-primary);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* --- Top Navigation Header --- */
+    .header {
+      height: 52px;
+      background-color: var(--bg-header);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      z-index: 20;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-badge {
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+      box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);
+    }
+
+    .current-path-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      max-width: 400px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .device-info {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background-color: #1a2335;
+      padding: 3px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .icon-btn:hover {
+      background-color: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .icon-btn.active {
+      background-color: var(--bg-active);
+      color: var(--accent-blue);
+    }
+
+    /* --- App Body (Sidebar + Content) --- */
+    .app-body {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* --- Sidebar --- */
+    .sidebar {
+      width: 250px;
+      background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .sidebar-search {
+      padding: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .filter-input-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .filter-input-wrap svg {
+      position: absolute;
+      left: 10px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .filter-input {
+      width: 100%;
+      background-color: var(--bg-main);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      font-size: 13px;
+      padding: 8px 12px 8px 32px;
+      border-radius: 6px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .filter-input:focus {
+      border-color: var(--accent-blue);
+    }
+
+    .sidebar-nav {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      font-size: 13.5px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .nav-item:hover {
+      background-color: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background-color: var(--bg-active);
+      color: var(--accent-blue);
+      font-weight: 500;
+      border-left: 3px solid var(--accent-blue);
+    }
+
+    .nav-item svg {
+      flex-shrink: 0;
+    }
+
+    .nav-arrow {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .sidebar-footer {
+      padding: 10px 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* --- Main Workspace --- */
+    .main-view {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--bg-main);
+      overflow: hidden;
+    }
+
+    /* --- Breadcrumbs Bar --- */
+    .breadcrumb-bar {
+      padding: 8px 16px;
+      background-color: rgba(21, 28, 44, 0.5);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      overflow-x: auto;
+    }
+
+    .crumb {
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 4px;
+      transition: color 0.15s;
+    }
+
+    .crumb:hover {
+      color: var(--accent-blue);
+      background-color: var(--bg-hover);
+    }
+
+    .crumb-sep {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    /* --- File Explorer View Container --- */
+    .explorer-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      position: relative;
+    }
+
+    /* --- List View --- */
+    .file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .list-row {
+      display: flex;
+      align-items: center;
+      padding: 9px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.15s;
+    }
+
+    .list-row:hover {
+      background-color: var(--bg-hover);
+    }
+
+    .list-row.selected {
+      background-color: var(--bg-active);
+      border: 1px solid var(--border-light);
+    }
+
+    .list-row-icon {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 12px;
+      flex-shrink: 0;
+    }
+
+    .list-row-details {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .list-row-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .list-row-date {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .list-row-size {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      padding-left: 16px;
+    }
+
+    /* --- Grid View --- */
+    .file-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 12px;
+    }
+
+    .grid-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 16px 10px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .grid-card:hover {
+      background-color: var(--bg-hover);
+      transform: translateY(-2px);
+      border-color: var(--border-light);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .grid-card.selected {
+      background-color: var(--bg-active);
+      border-color: var(--accent-blue);
+    }
+
+    .grid-card-icon {
+      width: 54px;
+      height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+    }
+
+    .grid-card-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .grid-card-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* --- Dropdown Popovers (Sort Menu) --- */
+    .popover-menu {
+      position: absolute;
+      background-color: #1e283d;
+      border: 1px solid #334464;
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+      width: 200px;
+      padding: 6px 0;
+      z-index: 100;
+      display: none;
+    }
+
+    .popover-item {
+      padding: 9px 16px;
+      font-size: 13.5px;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .popover-item:hover {
+      background-color: var(--bg-hover);
+      color: var(--accent-blue);
+    }
+
+    .popover-item.active {
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .popover-divider {
+      height: 1px;
+      background-color: var(--border-color);
+      margin: 6px 0;
+    }
+
+    /* --- Context Menu (Right Click) --- */
+    .context-menu {
+      position: absolute;
+      background-color: #1e283d;
+      border: 1px solid #334464;
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+      width: 180px;
+      padding: 6px 0;
+      z-index: 150;
+      display: none;
+      backdrop-filter: blur(8px);
+    }
+
+    .context-item {
+      padding: 9px 16px;
+      font-size: 13.5px;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .context-item:hover {
+      background-color: var(--bg-hover);
+    }
+
+    .context-item.danger {
+      color: var(--danger);
+    }
+
+    /* --- Modals & Dialogs --- */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(0, 0, 0, 0.75);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .modal-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal-box {
+      background-color: var(--bg-modal);
+      border: 1px solid var(--border-light);
+      border-radius: 12px;
+      width: 440px;
+      max-width: 90vw;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 16px 20px;
+      font-size: 16px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-body {
+      padding: 20px;
+    }
+
+    .modal-body label {
+      display: block;
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .modal-input {
+      width: 100%;
+      background-color: var(--bg-main);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      outline: none;
+    }
+
+    .modal-input:focus {
+      border-color: var(--accent-blue);
+    }
+
+    .modal-footer {
+      padding: 14px 20px;
+      background-color: rgba(15, 20, 31, 0.6);
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+    }
+
+    .btn-secondary {
+      background-color: #27344d;
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      background-color: #334464;
+    }
+
+    .btn-primary {
+      background-color: #0284c7;
+      color: #ffffff;
+    }
+
+    .btn-primary:hover {
+      background-color: #0369a1;
+    }
+
+    /* --- Toast Notification --- */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background-color: #1e293b;
+      color: #f8fafc;
+      border: 1px solid var(--border-light);
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      z-index: 300;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Navigation Bar -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo-badge">MiX</div>
+      <div class="current-path-title" id="currentPathTitle">Internal storage</div>
+    </div>
+
+    <div class="header-right">
+      <div class="device-info">
+        <span>Freebox Storage</span>
+        <span style="color: var(--accent-blue);">440.6 GiB / 479.39 GiB</span>
+      </div>
+
+      <div class="header-actions">
+        <!-- View Toggle (List / Grid) -->
+        <button class="icon-btn" id="btnToggleView" title="Toggle View Mode">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+        </button>
+
+        <!-- Sort Menu -->
+        <button class="icon-btn" id="btnSort" title="Sort Options">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M7 3v18M3 7l4-4 4 4M17 21V3m-4 14l4 4 4-4"></path>
+          </svg>
+        </button>
+
+        <!-- New Folder -->
+        <button class="icon-btn" id="btnNewFolder" title="New Folder">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </button>
+
+        <!-- Action / Add Menu -->
+        <button class="icon-btn" id="btnAddAction" title="Add / Actions">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- App Body (Sidebar + Content Explorer) -->
+  <div class="app-body">
+
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-search">
+        <div class="filter-input-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" class="filter-input" id="sidebarFilter" placeholder="Type to filter">
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" id="sidebarNav">
+        <!-- Remotes -->
+        <div class="nav-item active" data-path="/">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Internal storage</span>
+          <span class="nav-arrow">▶</span>
+        </div>
+
+        <div class="nav-item" data-path="/SMB">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>SMB</span>
+          <span class="nav-arrow">▶</span>
+        </div>
+
+        <div class="nav-item" data-path="/USB0">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>USB0</span>
+          <span class="nav-arrow">▶</span>
+        </div>
+
+        <div class="nav-item" data-path="/FTP">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>FTP</span>
+          <span class="nav-arrow">▶</span>
+        </div>
+
+        <div class="nav-item" data-path="/GDrive">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#38bdf8" stroke="#38bdf8" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Google Drive</span>
+          <span class="nav-arrow">▶</span>
+        </div>
+
+        <!-- Categories -->
+        <div style="height: 1px; background: var(--border-color); margin: 6px 16px;"></div>
+
+        <div class="nav-item" data-filter="Download">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Download</span>
+        </div>
+
+        <div class="nav-item" data-filter="Audio">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Audio</span>
+        </div>
+
+        <div class="nav-item" data-filter="Video">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Video</span>
+        </div>
+
+        <div class="nav-item" data-filter="Image">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Image</span>
+        </div>
+
+        <div class="nav-item" data-filter="APK">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>APK</span>
+        </div>
+
+        <div class="nav-item" data-filter="Archive">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Archive</span>
+        </div>
+
+        <div class="nav-item" data-filter="Document">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span>Document</span>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span id="itemsCountBadge">10</span>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="main-view">
+      <!-- Breadcrumbs Bar -->
+      <div class="breadcrumb-bar" id="breadcrumbBar">
+        <span class="crumb" data-path="/">/</span>
+        <span class="crumb-sep">&gt;</span>
+        <span class="crumb" data-path="/storage">storage</span>
+        <span class="crumb-sep">&gt;</span>
+        <span class="crumb" data-path="/storage/emulated">emulated</span>
+        <span class="crumb-sep">&gt;</span>
+        <span class="crumb" data-path="/storage/emulated/0">0</span>
+      </div>
+
+      <!-- File Explorer List / Grid Area -->
+      <div class="explorer-container" id="explorerContainer">
+        <!-- List or Grid generated dynamically via JS -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Sort Popover Menu (Matching Screenshot 2) -->
+  <div class="popover-menu" id="sortPopover">
+    <div class="popover-item active" data-sort="name-asc">
+      <span>Name (A - Z)</span>
+      <span>✓</span>
+    </div>
+    <div class="popover-item" data-sort="name-desc">
+      <span>Name (Z - A)</span>
+    </div>
+    <div class="popover-divider"></div>
+    <div class="popover-item" data-sort="type-asc">
+      <span>Type (A - Z)</span>
+    </div>
+    <div class="popover-item" data-sort="type-desc">
+      <span>Type (Z - A)</span>
+    </div>
+    <div class="popover-divider"></div>
+    <div class="popover-item" data-sort="size-desc">
+      <span>Size (Larger)</span>
+    </div>
+    <div class="popover-item" data-sort="size-asc">
+      <span>Size (Smaller)</span>
+    </div>
+    <div class="popover-divider"></div>
+    <div class="popover-item" data-sort="date-asc">
+      <span>Date (Older)</span>
+    </div>
+    <div class="popover-item" data-sort="date-desc">
+      <span>Date (Newer)</span>
+    </div>
+  </div>
+
+  <!-- Context Menu (Matching Screenshot 5) -->
+  <div class="context-menu" id="contextMenu">
+    <div class="context-item" id="ctxProperties">
+      <span style="color: #38bdf8; font-weight: bold; font-family: var(--font-mono);">ℹ</span>
+      <span>Properties</span>
+    </div>
+    <div class="context-item" id="ctxRename">
+      <span>✏️</span>
+      <span>Rename</span>
+    </div>
+    <div class="context-item" id="ctxCopy">
+      <span>📋</span>
+      <span>Copy</span>
+    </div>
+    <div class="context-item" id="ctxArchive">
+      <span>📦</span>
+      <span>Archive</span>
+    </div>
+    <div class="context-item" id="ctxDownload">
+      <span>⬇️</span>
+      <span>Download</span>
+    </div>
+    <div class="context-item danger" id="ctxDelete">
+      <span>🗑️</span>
+      <span>Delete</span>
+    </div>
+  </div>
+
+  <!-- New Folder Modal (Matching Screenshot 4) -->
+  <div class="modal-overlay" id="newFolderModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>MiXplorer</span>
+      </div>
+      <div class="modal-body">
+        <label>New folder:</label>
+        <input type="text" class="modal-input" id="newFolderNameInput" placeholder="Folder name">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelNewFolder">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmNewFolder">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toast">Operation completed</div>
+
+  <!-- Hidden File Input for Uploads -->
+  <input type="file" id="fileUploadInput" multiple style="display: none;">
+
+  <!-- JavaScript Client Logic -->
+  <script>
+    // State Management
+    let currentPath = "/";
+    let currentViewMode = "list"; // "list" or "grid"
+    let currentSort = "name-asc";
+    let selectedItem = null;
+    let fileFilterQuery = "";
+
+    // Mock/Real Item Store
+    let currentItems = [
+      { name: "Android", isDir: true, modTime: "Sunday, 10:27 PM", size: 0 },
+      { name: "Audiobooks", isDir: true, modTime: "Aug 8, 3:27 PM", size: 0 },
+      { name: "DCIM", isDir: true, modTime: "Sunday, 10:42 PM", size: 0 },
+      { name: "Documents", isDir: true, modTime: "Wednesday, 2:29 AM", size: 0 },
+      { name: "Download", isDir: true, modTime: "15 hours ago, 3:18 AM", size: 0 },
+      { name: "MIUI", isDir: true, modTime: "Wednesday, 9:23 PM", size: 0 },
+      { name: "Movies", isDir: true, modTime: "Monday, 2:16 AM", size: 0 },
+      { name: "Music", isDir: true, modTime: "Aug 8, 3:27 PM", size: 0 },
+      { name: "Pictures", isDir: true, modTime: "Wednesday, 9:17 AM", size: 0 },
+      { name: "Podcasts", isDir: true, modTime: "Aug 8, 3:27 PM", size: 0 },
+      { name: "freebox_config.yaml", isDir: false, modTime: "Aug 12, 11:00 AM", size: 1024 * 4 },
+      { name: "sample_backup.zip", isDir: false, modTime: "Aug 15, 8:40 PM", size: 1024 * 1024 * 12 }
+    ];
+
+    // DOM Elements
+    const explorer = document.getElementById("explorerContainer");
+    const sortPopover = document.getElementById("sortPopover");
+    const contextMenu = document.getElementById("contextMenu");
+    const newFolderModal = document.getElementById("newFolderModal");
+    const newFolderNameInput = document.getElementById("newFolderNameInput");
+    const btnToggleView = document.getElementById("btnToggleView");
+    const btnSort = document.getElementById("btnSort");
+    const btnNewFolder = document.getElementById("btnNewFolder");
+    const btnAddAction = document.getElementById("btnAddAction");
+    const sidebarFilter = document.getElementById("sidebarFilter");
+    const itemsCountBadge = document.getElementById("itemsCountBadge");
+    const fileUploadInput = document.getElementById("fileUploadInput");
+
+    // Fetch real directory data from Freebox API if available
+    async function loadDirectory(path) {
+      currentPath = path;
+      document.getElementById("currentPathTitle").textContent = path === "/" ? "Internal storage" : path;
+
+      try {
+        const resp = await fetch(`/api/vfs/local?path=${encodeURIComponent(path)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data)) {
+            currentItems = data.map(item => ({
+              name: item.Name || item.name,
+              isDir: item.IsDir || item.is_dir,
+              modTime: item.ModTime || item.mod_time || new Date().toLocaleString(),
+              size: item.Size || item.size || 0
+            }));
+          }
+        }
+      } catch (err) {
+        // Use initial/fallback mock data
+      }
+
+      renderExplorer();
+    }
+
+    function renderExplorer() {
+      explorer.innerHTML = "";
+
+      let items = [...currentItems];
+
+      // Filter
+      if (fileFilterQuery) {
+        const q = fileFilterQuery.toLowerCase();
+        items = items.filter(i => i.name.toLowerCase().includes(q));
+      }
+
+      // Sort
+      items.sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1; // Folders always first
+        if (currentSort === "name-asc") return a.name.localeCompare(b.name);
+        if (currentSort === "name-desc") return b.name.localeCompare(a.name);
+        if (currentSort === "size-desc") return b.size - a.size;
+        if (currentSort === "size-asc") return a.size - b.size;
+        return 0;
+      });
+
+      itemsCountBadge.textContent = `${items.length} items`;
+
+      if (currentViewMode === "list") {
+        const listWrap = document.createElement("div");
+        listWrap.className = "file-list";
+
+        // Parent navigation row
+        if (currentPath !== "/") {
+          const backRow = document.createElement("div");
+          backRow.className = "list-row";
+          backRow.innerHTML = `
+            <div class="list-row-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
+            <div class="list-row-details">
+              <div class="list-row-name">..</div>
+            </div>
+            <div class="list-row-size">Back</div>
+          `;
+          backRow.onclick = () => {
+            const parts = currentPath.split("/").filter(Boolean);
+            parts.pop();
+            loadDirectory("/" + parts.join("/"));
+          };
+          listWrap.appendChild(backRow);
+        }
+
+        items.forEach(item => {
+          const row = document.createElement("div");
+          row.className = "list-row";
+          const icon = item.isDir ? folderIconSVG() : fileIconSVG(item.name);
+          const sizeStr = item.isDir ? "&lt;dir&gt;" : formatBytes(item.size);
+
+          row.innerHTML = `
+            <div class="list-row-icon">${icon}</div>
+            <div class="list-row-details">
+              <div class="list-row-name">${escapeHTML(item.name)}</div>
+              <div class="list-row-date">${escapeHTML(item.modTime)}</div>
+            </div>
+            <div class="list-row-size">${sizeStr}</div>
+          `;
+
+          row.onclick = (e) => {
+            if (item.isDir) {
+              loadDirectory((currentPath === "/" ? "" : currentPath) + "/" + item.name);
+            }
+          };
+
+          row.oncontextmenu = (e) => {
+            e.preventDefault();
+            selectedItem = item;
+            showContextMenu(e.clientX, e.clientY);
+          };
+
+          listWrap.appendChild(row);
+        });
+
+        explorer.appendChild(listWrap);
+      } else {
+        // Grid View
+        const gridWrap = document.createElement("div");
+        gridWrap.className = "file-grid";
+
+        items.forEach(item => {
+          const card = document.createElement("div");
+          card.className = "grid-card";
+          const icon = item.isDir ? folderIconGridSVG() : fileIconGridSVG(item.name);
+          const sizeStr = item.isDir ? "&lt;dir&gt;" : formatBytes(item.size);
+
+          card.innerHTML = `
+            <div class="grid-card-icon">${icon}</div>
+            <div class="grid-card-name" title="${escapeHTML(item.name)}">${escapeHTML(item.name)}</div>
+            <div class="grid-card-sub">${sizeStr}</div>
+          `;
+
+          card.onclick = () => {
+            if (item.isDir) {
+              loadDirectory((currentPath === "/" ? "" : currentPath) + "/" + item.name);
+            }
+          };
+
+          card.oncontextmenu = (e) => {
+            e.preventDefault();
+            selectedItem = item;
+            showContextMenu(e.clientX, e.clientY);
+          };
+
+          gridWrap.appendChild(card);
+        });
+
+        explorer.appendChild(gridWrap);
+      }
+    }
+
+    function folderIconSVG() {
+      return `<svg width="24" height="24" viewBox="0 0 24 24" fill="#f59e0b" stroke="#f59e0b" stroke-width="1"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
+    }
+
+    function folderIconGridSVG() {
+      return `<svg width="50" height="50" viewBox="0 0 24 24" fill="#f59e0b" stroke="#d97706" stroke-width="0.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
+    }
+
+    function fileIconSVG(name) {
+      return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`;
+    }
+
+    function fileIconGridSVG(name) {
+      return `<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="1.8"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB", "TB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+    }
+
+    function escapeHTML(str) {
+      return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.style.display = "block";
+      setTimeout(() => { t.style.display = "none"; }, 2500);
+    }
+
+    // Toggle List / Grid View
+    btnToggleView.onclick = () => {
+      currentViewMode = (currentViewMode === "list") ? "grid" : "list";
+      btnToggleView.classList.toggle("active", currentViewMode === "grid");
+      renderExplorer();
+    };
+
+    // Sort Menu Popover
+    btnSort.onclick = (e) => {
+      e.stopPropagation();
+      const rect = btnSort.getBoundingClientRect();
+      sortPopover.style.top = (rect.bottom + 8) + "px";
+      sortPopover.style.right = (window.innerWidth - rect.right) + "px";
+      sortPopover.style.display = (sortPopover.style.display === "block") ? "none" : "block";
+    };
+
+    document.querySelectorAll(".popover-item").forEach(item => {
+      item.onclick = () => {
+        document.querySelectorAll(".popover-item").forEach(i => i.classList.remove("active"));
+        item.classList.add("active");
+        currentSort = item.getAttribute("data-sort");
+        sortPopover.style.display = "none";
+        renderExplorer();
+      };
+    });
+
+    // New Folder Modal
+    btnNewFolder.onclick = () => {
+      newFolderNameInput.value = "";
+      newFolderModal.classList.add("open");
+      newFolderNameInput.focus();
+    };
+
+    document.getElementById("btnCancelNewFolder").onclick = () => {
+      newFolderModal.classList.remove("open");
+    };
+
+    document.getElementById("btnConfirmNewFolder").onclick = () => {
+      const val = newFolderNameInput.value.trim();
+      if (val) {
+        currentItems.unshift({
+          name: val,
+          isDir: true,
+          modTime: "Just now",
+          size: 0
+        });
+        renderExplorer();
+        showToast(`Folder "${val}" created`);
+      }
+      newFolderModal.classList.remove("open");
+    };
+
+    // Action Plus Button (Upload, etc.)
+    btnAddAction.onclick = () => {
+      fileUploadInput.click();
+    };
+
+    fileUploadInput.onchange = () => {
+      if (fileUploadInput.files.length > 0) {
+        for (let file of fileUploadInput.files) {
+          currentItems.push({
+            name: file.name,
+            isDir: false,
+            modTime: "Just now",
+            size: file.size
+          });
+        }
+        renderExplorer();
+        showToast(`Uploaded ${fileUploadInput.files.length} file(s)`);
+      }
+    };
+
+    // Context Menu
+    function showContextMenu(x, y) {
+      contextMenu.style.top = `${y}px`;
+      contextMenu.style.left = `${x}px`;
+      contextMenu.style.display = "block";
+    }
+
+    document.getElementById("ctxDelete").onclick = () => {
+      if (selectedItem) {
+        currentItems = currentItems.filter(i => i.name !== selectedItem.name);
+        renderExplorer();
+        showToast(`Deleted ${selectedItem.name}`);
+      }
+      contextMenu.style.display = "none";
+    };
+
+    document.getElementById("ctxRename").onclick = () => {
+      if (selectedItem) {
+        const newName = prompt("Enter new name:", selectedItem.name);
+        if (newName && newName !== selectedItem.name) {
+          selectedItem.name = newName;
+          renderExplorer();
+          showToast(`Renamed to ${newName}`);
+        }
+      }
+      contextMenu.style.display = "none";
+    };
+
+    document.getElementById("ctxProperties").onclick = () => {
+      if (selectedItem) {
+        alert(`Name: ${selectedItem.name}\nType: ${selectedItem.isDir ? "Folder" : "File"}\nSize: ${formatBytes(selectedItem.size)}\nModified: ${selectedItem.modTime}`);
+      }
+      contextMenu.style.display = "none";
+    };
+
+    document.getElementById("ctxDownload").onclick = () => {
+      if (selectedItem) {
+        showToast(`Downloading ${selectedItem.name}...`);
+      }
+      contextMenu.style.display = "none";
+    };
+
+    // Global Click Close
+    window.onclick = () => {
+      sortPopover.style.display = "none";
+      contextMenu.style.display = "none";
+    };
+
+    // Sidebar Live Filter
+    sidebarFilter.oninput = (e) => {
+      fileFilterQuery = e.target.value;
+      renderExplorer();
+    };
+
+    // Sidebar Nav Item Clicks
+    document.querySelectorAll(".nav-item").forEach(item => {
+      item.onclick = () => {
+        document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));
+        item.classList.add("active");
+        const p = item.getAttribute("data-path");
+        if (p) {
+          loadDirectory(p);
+        }
+      };
+    });
+
+    // Initial Load
+    loadDirectory("/");
+  </script>
+</body>
+</html>

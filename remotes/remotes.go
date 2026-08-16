@@ -1,6 +1,7 @@
 package remotes
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"freebox/ftp"
+	"freebox/gdrive"
 	"freebox/http"
 	"freebox/ssh"
 	"freebox/storage"
@@ -24,13 +26,15 @@ var (
 type RemoteType string
 
 const (
-	TypeLocal  RemoteType = "local"
-	TypeMemory RemoteType = "mem"
-	TypeWebDAV RemoteType = "webdav"
-	TypeFTP    RemoteType = "ftp"
-	TypeSFTP   RemoteType = "sftp"
-	TypeSMB    RemoteType = "smb"
-	TypeS3     RemoteType = "s3"
+	TypeLocal       RemoteType = "local"
+	TypeMemory      RemoteType = "mem"
+	TypeWebDAV      RemoteType = "webdav"
+	TypeFTP         RemoteType = "ftp"
+	TypeSFTP        RemoteType = "sftp"
+	TypeSMB         RemoteType = "smb"
+	TypeS3          RemoteType = "s3"
+	TypeGDrive      RemoteType = "gdrive"
+	TypeGoogleDrive RemoteType = "googledrive"
 )
 
 // RemoteConfig contains configuration and credentials for a remote storage target.
@@ -282,6 +286,21 @@ func (m *Manager) TestConnection(cfg RemoteConfig) (bool, error) {
 		}
 		_ = conn.Close()
 		return true, nil
+	case TypeGDrive, TypeGoogleDrive:
+		authCfg := gdrive.AuthConfig{
+			ClientID:        cfg.Options["client_id"],
+			ClientSecret:    cfg.Options["client_secret"],
+			CredentialsFile: cfg.Options["credentials_file"],
+			TokenFile:       cfg.Options["token_file"],
+			Port:            cfg.Port,
+			CallbackPath:    cfg.Options["callback_path"],
+			RedirectURL:     cfg.URL,
+		}
+		_, _, err := gdrive.GetDriveService(context.Background(), authCfg)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
 	default:
 		return true, nil
 	}
@@ -311,6 +330,25 @@ func (m *Manager) mountInternal(cfg RemoteConfig) error {
 	case TypeWebDAV:
 		client := http.NewWebDAVClient(cfg.URL, cfg.Username, cfg.Password, 30*time.Second)
 		fsys = vfs.NewWebDAVAdapter(client)
+	case TypeGDrive, TypeGoogleDrive:
+		authCfg := gdrive.AuthConfig{
+			ClientID:        cfg.Options["client_id"],
+			ClientSecret:    cfg.Options["client_secret"],
+			CredentialsFile: cfg.Options["credentials_file"],
+			TokenFile:       cfg.Options["token_file"],
+			Port:            cfg.Port,
+			CallbackPath:    cfg.Options["callback_path"],
+			RedirectURL:     cfg.URL,
+		}
+		srv, _, err := gdrive.GetDriveService(context.Background(), authCfg)
+		if err != nil {
+			return fmt.Errorf("gdrive auth failed: %w", err)
+		}
+		rootFolder := cfg.Path
+		if rootFolder == "" {
+			rootFolder = cfg.Options["root_folder_id"]
+		}
+		fsys = gdrive.NewGDriveFS(srv, rootFolder)
 	default:
 		fsys = vfs.NewMemFS()
 	}

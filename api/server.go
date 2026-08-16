@@ -18,6 +18,7 @@ import (
 	"freebox/storage"
 	"freebox/thumbnail"
 	"freebox/vfs"
+	"freebox/web"
 )
 
 // ServerConfig configures the API Server.
@@ -159,6 +160,18 @@ func (s *Server) Handler() http.Handler {
 
 	// Servers status
 	mux.HandleFunc("/api/servers", s.requireAuth(s.handleServers))
+
+	// Embedded Web Explorer UI
+	webHandler := web.Handler()
+	mux.Handle("/ui", webHandler)
+	mux.Handle("/ui/", webHandler)
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || !strings.HasPrefix(r.URL.Path, "/api/") {
+			webHandler.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}))
 
 	return s.corsMiddleware(mux)
 }

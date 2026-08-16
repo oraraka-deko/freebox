@@ -1,0 +1,53 @@
+# Binaries and build outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+build/
+freebox
+streamproxy
+
+# Google Drive & OAuth Credentials (DO NOT COMMIT!)
+credentials.json
+token.json
+client_secret*.json
+*.token
+*.credentials
+
+# Local Databases and Storage
+*.db
+*.db-journal
+*.bolt
+data/
+uploads/
+cache/
+
+# Private Keys and Certificates
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Temporary files & logs
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# IDE and Editor configs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

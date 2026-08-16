@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
+
+	"freebox/web"
 )
 
 // Config defines the configuration for the HTTP server.
@@ -50,8 +53,18 @@ func NewServer(cfg Config) *Server {
 		mux:    mux,
 	}
 
+	webHandler := web.Handler()
+	mux.Handle("/ui", webHandler)
+	mux.Handle("/ui/", webHandler)
+
 	if cfg.RootDir != "" {
-		mux.Handle("/", http.FileServer(http.Dir(cfg.RootDir)))
+		if fi, err := os.Stat(cfg.RootDir); err == nil && fi.IsDir() {
+			mux.Handle("/", http.FileServer(http.Dir(cfg.RootDir)))
+		} else {
+			mux.Handle("/", webHandler)
+		}
+	} else {
+		mux.Handle("/", webHandler)
 	}
 
 	return s
