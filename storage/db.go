@@ -33,6 +33,7 @@ var (
 	BucketMeta         = []byte("meta")
 	BucketThumbnails   = []byte("thumbnails")
 	BucketCertificates = []byte("certificates")
+	BucketTelegram     = []byte("telegram")
 )
 
 // DB manages an encrypted BBolt embedded database.
@@ -78,6 +79,7 @@ func Open(cfg Config) (*DB, error) {
 			BucketMeta,
 			BucketThumbnails,
 			BucketCertificates,
+			BucketTelegram,
 		}
 		for _, b := range buckets {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {

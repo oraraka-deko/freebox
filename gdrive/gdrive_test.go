@@ -50,7 +50,7 @@ func TestBuildOAuth2Config(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildOAuth2Config from JSON failed: %v", err)
 	}
-	if oConfigJSON.ClientID != "json-cleusercontent.com" {
+	if oConfigJSON.ClientID != "json-client-id.apps.googleusercontent.com" {
 		t.Errorf("JSON ClientID mismatch: %s", oConfigJSON.ClientID)
 	}
 	if oConfigJSON.RedirectURL != "http://localhost:22816/freebox" {

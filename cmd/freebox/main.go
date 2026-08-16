@@ -18,6 +18,7 @@ import (
 	"freebox/client"
 	"freebox/engine"
 	"freebox/storage"
+	"freebox/telegram"
 	"freebox/vfs"
 )
 
@@ -33,6 +34,8 @@ func main() {
 		runServer(os.Args[2:])
 	case "login":
 		runLogin(os.Args[2:])
+	case "telegram", "tg":
+		runTelegram(os.Args[2:])
 	case "mount":
 		runMount(os.Args[2:])
 	case "ls":
@@ -59,6 +62,7 @@ func printUsage() {
 Usage:
   freebox server [options]                      Start the Freebox Remote Orchestrator node
   freebox login [options]                       Authenticate client and store session token
+  freebox telegram <login|list|status|rm>       Manage Telegram accounts and multi-session auth
   freebox mount <list|add|rm> [args]            Manage storage mounts (Local, SMB, FTP, WebDAV)
   freebox ls <mount>:<path>                     List directory entries on a mount
   freebox upload <local_file> <mount>:<path>    Upload a local file to a mount
@@ -117,12 +121,20 @@ func runServer(args []string) {
 		_ = reg.Mount("local", vfs.MountConfig{Type: "local", Path: "."}, false)
 	}
 
+	tgMgr, err := telegram.NewManager(db, telegram.AuthConfig{
+		SessionBaseDir: filepath.Join(*dataDir, "telegram"),
+	})
+	if err != nil {
+		log.Printf("Warning: failed initializing telegram manager: %v", err)
+	}
+
 	srv := api.NewServer(api.ServerConfig{
-		Addr:       *port,
-		AuthMgr:    authMgr,
-		StorageDB:  db,
-		Mounts:     reg,
-		Engine:     eng,
+		Addr:        *port,
+		AuthMgr:     authMgr,
+		StorageDB:   db,
+		Mounts:      reg,
+		Engine:      eng,
+		TelegramMgr: tgMgr,
 	})
 
 	log.Printf("=======================================================")
