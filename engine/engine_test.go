@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"freebox/proxy"
+	"freebox/storage"
 	"freebox/vfs"
 )
 
@@ -243,3 +244,52 @@ func (a *atomicBool) set(val bool) {
 func (a *atomicBool) get() bool {
 	return a.v
 }
+
+func TestEngineDBPersistence(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "tasks.db")
+	db, err := storage.Open(storage.Config{
+		Path:       dbPath,
+		Passphrase: "test-passphrase",
+	})
+	if err != nil {
+		t.Fatalf("failed to open storage db: %v", err)
+	}
+	defer db.Close()
+
+	eng := NewEngine(EngineConfig{
+		MaxWorkers: 2,
+		DB:         db,
+	})
+	defer eng.Close()
+
+	mem := vfs.NewMemFS()
+	h, err := eng.CreateFile(mem, "/task_test.txt", []byte("data"), true)
+	if err != nil {
+		t.Fatalf("CreateFile failed: %v", err)
+	}
+	h.Wait()
+
+	// Verify task history
+	history, err := eng.ListHistory()
+	if err != nil {
+		t.Fatalf("ListHistory failed: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("expected 1 task in history, got %d", len(history))
+	}
+	if history[0].ID != h.ID() || history[0].Status != StatusCompleted {
+		t.Errorf("history mismatch: %+v", history[0])
+	}
+
+	// Verify delete task
+	err = eng.DeleteTask(h.ID())
+	if err != nil {
+		t.Fatalf("DeleteTask failed: %v", err)
+	}
+	historyAfter, _ := eng.ListHistory()
+	if len(historyAfter) != 0 {
+		t.Errorf("expected empty history after deletion, got %d", len(historyAfter))
+	}
+}
+

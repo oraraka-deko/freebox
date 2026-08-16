@@ -18,14 +18,26 @@ const (
 	Skip
 	// Return an error on collision.
 	ErrorOnCollision
+	// AutoRename automatically appends numeric suffixes like "file (1).txt" to preserve both.
+	AutoRename
+	// KeepNewer overwrites only if the source file is newer than the destination file.
+	KeepNewer
+	// KeepLarger overwrites only if the source file size is larger than the destination file.
+	KeepLarger
+	// KeepSmaller overwrites only if the source file size is smaller than the destination file.
+	KeepSmaller
 )
+
+// RenameResolver is a function that generates a new destination path given collision.
+type RenameResolver func(srcPath, dstPath string) string
 
 // TransferOptions configures file transfer behavior.
 type TransferOptions struct {
-	Policy     CollisionPolicy
-	BufferSize int
-	OnProgress func(p string, bytesCopied, totalBytes int64)
-	OnItemDone func(p string, err error)
+	Policy         CollisionPolicy
+	CustomResolver RenameResolver
+	BufferSize     int
+	OnProgress     func(p string, bytesCopied, totalBytes int64)
+	OnItemDone     func(p string, err error)
 }
 
 // DefaultTransferOptions returns default transfer settings.
@@ -33,6 +45,28 @@ func DefaultTransferOptions() TransferOptions {
 	return TransferOptions{
 		Policy:     Overwrite,
 		BufferSize: 64 * 1024,
+	}
+}
+
+// GenerateAutoRenamePath generates a unique non-colliding path on fs by appending (1), (2), etc.
+func GenerateAutoRenamePath(fs FileSystem, dstPath string) string {
+	dstPath = NormalizePath(dstPath)
+	if !fs.Exists(dstPath) {
+		return dstPath
+	}
+
+	dir := path.Dir(dstPath)
+	base := path.Base(dstPath)
+	ext := path.Ext(base)
+	nameWithoutExt := strings.TrimSuffix(base, ext)
+
+	counter := 1
+	for {
+		candidate := NormalizePath(fmt.Sprintf("%s/%s (%d)%s", dir, nameWithoutExt, counter, ext))
+		if !fs.Exists(candidate) {
+			return candidate
+		}
+		counter++
 	}
 }
 
@@ -68,6 +102,27 @@ func (e *TransferEngine) CopyFile(srcFS FileSystem, srcPath string, dstFS FileSy
 			return nil
 		case ErrorOnCollision:
 			return fmt.Errorf("destination %s: %w", dstPath, ErrAlreadyExists)
+		case AutoRename:
+			dstPath = GenerateAutoRenamePath(dstFS, dstPath)
+		case KeepNewer:
+			dstInfo, err := dstFS.Stat(dstPath)
+			if err == nil && !srcInfo.ModTime.After(dstInfo.ModTime) {
+				return nil // Destination is newer or equal, skip
+			}
+		case KeepLarger:
+			dstInfo, err := dstFS.Stat(dstPath)
+			if err == nil && srcInfo.Size <= dstInfo.Size {
+				return nil // Destination is larger or equal, skip
+			}
+		case KeepSmaller:
+			dstInfo, err := dstFS.Stat(dstPath)
+			if err == nil && srcInfo.Size >= dstInfo.Size {
+				return nil // Destination is smaller or equal, skip
+			}
+		default:
+			if e.opts.CustomResolver != nil {
+				dstPath = e.opts.CustomResolver(srcPath, dstPath)
+			}
 		}
 	}
 
@@ -211,9 +266,68 @@ func TransferMatching(srcFS FileSystem, dstFS FileSystem, srcDir, dstDir string,
 	return transferred, err
 }
 
+// MoveFile moves a single file from srcFS to dstFS with collision policy handling.
+func (e *TransferEngine) MoveFile(srcFS FileSystem, srcPath string, dstFS FileSystem, dstPath string) error {
+	srcPath = NormalizePath(srcPath)
+	dstPath = NormalizePath(dstPath)
+
+	// If same filesystem instance, try fast-path Rename
+	if srcFS == dstFS {
+		if dstFS.Exists(dstPath) {
+			switch e.opts.Policy {
+			case Skip:
+				return nil
+			case ErrorOnCollision:
+				return fmt.Errorf("destination %s: %w", dstPath, ErrAlreadyExists)
+			case AutoRename:
+				dstPath = GenerateAutoRenamePath(dstFS, dstPath)
+			case KeepNewer:
+				srcInfo, _ := srcFS.Stat(srcPath)
+				dstInfo, _ := dstFS.Stat(dstPath)
+				if srcInfo != nil && dstInfo != nil && !srcInfo.ModTime.After(dstInfo.ModTime) {
+					return nil
+				}
+			}
+		}
+		return srcFS.Rename(srcPath, dstPath)
+	}
+
+	// Cross-filesystem move: copy then remove
+	if err := e.CopyFile(srcFS, srcPath, dstFS, dstPath); err != nil {
+		return err
+	}
+	return srcFS.Remove(srcPath)
+}
+
+// MoveTree moves an entire directory tree from srcFS to dstFS.
+func (e *TransferEngine) MoveTree(srcFS FileSystem, srcRoot string, dstFS FileSystem, dstRoot string) error {
+	srcRoot = NormalizePath(srcRoot)
+	dstRoot = NormalizePath(dstRoot)
+
+	if srcFS == dstFS && !dstFS.Exists(dstRoot) {
+		return srcFS.Rename(srcRoot, dstRoot)
+	}
+
+	if err := e.CopyTree(srcFS, srcRoot, dstFS, dstRoot); err != nil {
+		return err
+	}
+	return srcFS.RemoveAll(srcRoot)
+}
+
+// MoveFile moves a single file using default options.
+func MoveFile(srcFS FileSystem, srcPath string, dstFS FileSystem, dstPath string) error {
+	return NewTransferEngine(DefaultTransferOptions()).MoveFile(srcFS, srcPath, dstFS, dstPath)
+}
+
+// MoveTree moves an entire directory tree using default options.
+func MoveTree(srcFS FileSystem, srcRoot string, dstFS FileSystem, dstRoot string) error {
+	return NewTransferEngine(DefaultTransferOptions()).MoveTree(srcFS, srcRoot, dstFS, dstRoot)
+}
+
 // TransferStats holds report data about a transfer operation.
 type TransferStats struct {
 	FilesCopied int64
 	BytesCopied int64
 	Duration    time.Duration
 }
+

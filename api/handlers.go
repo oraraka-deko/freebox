@@ -1,19 +1,25 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 
+	"freebox/archive"
 	"freebox/auth"
+	"freebox/cert"
 	"freebox/clipboard"
+	"freebox/dedup"
 	"freebox/engine"
 	"freebox/proxy"
+	"freebox/remotes"
+	"freebox/search"
+	"freebox/signer"
+	"freebox/thumbnail"
 	"freebox/vfs"
 )
 
@@ -781,7 +787,591 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request) {
 	s.jsonResponse(w, http.StatusOK, statuses)
 }
 
-var (
-	_ = errors.New
-	_ = context.Background
-)
+// --- Task History Handler ---
+
+func (s *Server) handleTaskHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.engine == nil {
+		s.jsonError(w, "Engine not available", http.StatusServiceUnavailable)
+		return
+	}
+	history, err := s.engine.ListHistory()
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, history)
+}
+
+// --- Custom Remotes Handlers ---
+
+func (s *Server) handleRemotes(w http.ResponseWriter, r *http.Request) {
+	if s.remotesMgr == nil {
+		s.jsonError(w, "Remotes manager not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		list, err := s.remotesMgr.List()
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, list)
+	case http.MethodPost:
+		var cfg remotes.RemoteConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			s.jsonError(w, "Invalid remote payload: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.remotesMgr.Create(cfg); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusCreated, cfg)
+	default:
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleRemoteByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/remotes/")
+	if name == "" {
+		s.jsonError(w, "Remote name required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg, err := s.remotesMgr.Get(name)
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, cfg)
+	case http.MethodPut:
+		var cfg remotes.RemoteConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			s.jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		cfg.Name = name
+		if err := s.remotesMgr.Update(cfg); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, cfg)
+	case http.MethodDelete:
+		if err := s.remotesMgr.Delete(name); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, map[string]string{"message": "Remote deleted"})
+	default:
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleRemoteTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var cfg remotes.RemoteConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ok, err := s.remotesMgr.TestConnection(cfg)
+	if err != nil {
+		s.jsonResponse(w, http.StatusOK, map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, map[string]interface{}{"success": ok})
+}
+
+// --- Search & Replace Handlers ---
+
+type SearchAPIRequest struct {
+	Mount            string               `json:"mount"`
+	RootPath         string               `json:"root_path"`
+	NamePattern      string               `json:"name_pattern"`
+	NameMatchType    search.MatchType     `json:"name_match_type"`
+	ContentPattern   string               `json:"content_pattern"`
+	ContentMatchType search.MatchType     `json:"content_match_type"`
+	CaseSensitive    bool                 `json:"case_sensitive"`
+	Target           search.SearchTarget  `json:"target"`
+	Filters          search.FilterOptions `json:"filters"`
+}
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SearchAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "Invalid search request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, fmt.Sprintf("Mount '%s' not found", req.Mount), http.StatusNotFound)
+		return
+	}
+
+	engine := search.NewEngine(fsys)
+	results, stats, err := engine.Search(r.Context(), search.SearchQuery{
+		RootPath:         req.RootPath,
+		NamePattern:      req.NamePattern,
+		NameMatchType:    req.NameMatchType,
+		ContentPattern:   req.ContentPattern,
+		ContentMatchType: req.ContentMatchType,
+		CaseSensitive:    req.CaseSensitive,
+		Target:           req.Target,
+		Filters:          req.Filters,
+	})
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"results": results,
+		"stats":   stats,
+	})
+}
+
+type SearchReplaceAPIRequest struct {
+	SearchAPIRequest
+	Replacement  string `json:"replacement"`
+	DryRun       bool   `json:"dry_run"`
+	CreateBackup bool   `json:"create_backup"`
+}
+
+func (s *Server) handleSearchReplace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SearchReplaceAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, fmt.Sprintf("Mount '%s' not found", req.Mount), http.StatusNotFound)
+		return
+	}
+
+	engine := search.NewEngine(fsys)
+	results, stats, err := engine.Search(r.Context(), search.SearchQuery{
+		RootPath:         req.RootPath,
+		NamePattern:      req.NamePattern,
+		NameMatchType:    req.NameMatchType,
+		ContentPattern:   req.ContentPattern,
+		ContentMatchType: req.ContentMatchType,
+		CaseSensitive:    req.CaseSensitive,
+		Target:           req.Target,
+		Filters:          req.Filters,
+		Replacement:      req.Replacement,
+		IsReplace:        true,
+		DryRun:           req.DryRun,
+		CreateBackup:     req.CreateBackup,
+	})
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"results": results,
+		"stats":   stats,
+	})
+}
+
+// --- Deduplication Handler ---
+
+type DedupAPIRequest struct {
+	Mount       string            `json:"mount"`
+	RootPath    string            `json:"root_path"`
+	Method      dedup.DedupMethod `json:"method"`
+	Action      dedup.DedupAction `json:"action"`
+	KeepPolicy  dedup.KeepPolicy  `json:"keep_policy"`
+	MinFileSize int64             `json:"min_file_size"`
+	MaxFileSize int64             `json:"max_file_size"`
+	DryRun      bool              `json:"dry_run"`
+}
+
+func (s *Server) handleDedup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req DedupAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, fmt.Sprintf("Mount '%s' not found", req.Mount), http.StatusNotFound)
+		return
+	}
+
+	engine := dedup.NewEngine(fsys)
+	groups, prog, err := engine.Deduplicate(r.Context(), dedup.DedupOptions{
+		RootPath:    req.RootPath,
+		Method:      req.Method,
+		Action:      req.Action,
+		KeepPolicy:  req.KeepPolicy,
+		MinFileSize: req.MinFileSize,
+		MaxFileSize: req.MaxFileSize,
+		DryRun:      req.DryRun,
+	})
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"groups":   groups,
+		"progress": prog,
+	})
+}
+
+// --- Metadata & Permissions Handler ---
+
+func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	mount := r.URL.Query().Get("mount")
+	filePath := r.URL.Query().Get("path")
+
+	if mount == "" || filePath == "" {
+		s.jsonError(w, "mount and path query parameters required", http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(mount)
+	if !ok {
+		s.jsonError(w, fmt.Sprintf("Mount '%s' not found", mount), http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		info, err := s.metaMgr.GetInfo(fsys, filePath)
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, info)
+
+	case http.MethodPost:
+		var body struct {
+			CustomMeta map[string]string `json:"custom_metadata"`
+			Touch      bool              `json:"touch"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		for k, v := range body.CustomMeta {
+			_ = s.metaMgr.SetCustomMeta(filePath, k, v)
+		}
+		s.jsonResponse(w, http.StatusOK, map[string]string{"status": "metadata updated"})
+
+	default:
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// --- Media Thumbnail Handler ---
+
+func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	mount := r.URL.Query().Get("mount")
+	filePath := r.URL.Query().Get("path")
+	width, _ := strconv.Atoi(r.URL.Query().Get("w"))
+	height, _ := strconv.Atoi(r.URL.Query().Get("h"))
+
+	if width <= 0 {
+		width = 256
+	}
+	if height <= 0 {
+		height = 256
+	}
+
+	fsys, ok := s.mounts.Get(mount)
+	if !ok {
+		s.jsonError(w, "mount not found", http.StatusNotFound)
+		return
+	}
+
+	data, mimeType, err := s.thumbMgr.GetOrGenerate(r.Context(), fsys, filePath, thumbnail.ThumbnailOptions{
+		Width:       width,
+		Height:      height,
+		Format:      thumbnail.FormatJPEG,
+		Quality:     80,
+		Placeholder: true,
+	})
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(data)
+}
+
+// --- Archive Operations Handlers ---
+
+func (s *Server) handleArchivePreview(w http.ResponseWriter, r *http.Request) {
+	mount := r.URL.Query().Get("mount")
+	archivePath := r.URL.Query().Get("path")
+	pass := r.URL.Query().Get("password")
+
+	fsys, ok := s.mounts.Get(mount)
+	if !ok {
+		s.jsonError(w, "mount not found", http.StatusNotFound)
+		return
+	}
+
+	entries, err := archive.Preview(fsys, archivePath, pass)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, entries)
+}
+
+func (s *Server) handleArchiveCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Mount       string   `json:"mount"`
+		ArchivePath string   `json:"archive_path"`
+		Sources     []string `json:"sources"`
+		Password    string   `json:"password"`
+		Comment     string   `json:"comment"`
+		PartSizeMB  int      `json:"part_size_mb"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, "mount not found", http.StatusNotFound)
+		return
+	}
+
+	if req.PartSizeMB > 0 {
+		parts, err := archive.CreateMultiPart(fsys, req.ArchivePath, req.Sources, int64(req.PartSizeMB)*1024*1024, archive.CreateOptions{
+			Password: req.Password,
+			Comment:  req.Comment,
+		})
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusCreated, map[string]interface{}{"parts": parts})
+		return
+	}
+
+	err := archive.Create(fsys, req.ArchivePath, req.Sources, archive.CreateOptions{
+		Password: req.Password,
+		Comment:  req.Comment,
+	})
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonResponse(w, http.StatusCreated, map[string]string{"message": "Archive created successfully"})
+}
+
+func (s *Server) handleArchiveExtract(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Mount         string   `json:"mount"`
+		ArchivePath   string   `json:"archive_path"`
+		TargetDir     string   `json:"target_dir"`
+		Password      string   `json:"password"`
+		SelectedFiles []string `json:"selected_files"`
+		Overwrite     bool     `json:"overwrite"`
+		PartPaths     []string `json:"part_paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, "mount not found", http.StatusNotFound)
+		return
+	}
+
+	if len(req.PartPaths) > 0 {
+		err := archive.ExtractMultiPart(fsys, req.PartPaths, req.TargetDir, archive.ExtractOptions{
+			Password:      req.Password,
+			SelectedFiles: req.SelectedFiles,
+			Overwrite:     req.Overwrite,
+		})
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, map[string]string{"message": "Multi-part archive extracted"})
+		return
+	}
+
+	err := archive.Extract(fsys, req.ArchivePath, req.TargetDir, archive.ExtractOptions{
+		Password:      req.Password,
+		SelectedFiles: req.SelectedFiles,
+		Overwrite:     req.Overwrite,
+	})
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, map[string]string{"message": "Archive extracted successfully"})
+}
+
+// --- Certificate Handlers ---
+
+func (s *Server) handleCertGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var opts cert.CertificateOptions
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	bundle, err := cert.Generate(opts)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_ = s.certMgr.Save(bundle)
+	s.jsonResponse(w, http.StatusCreated, bundle)
+}
+
+func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	list, err := s.certMgr.List()
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, list)
+}
+
+// --- Signer Handlers ---
+
+func (s *Server) handleSign(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Mount      string `json:"mount"`
+		FilePath   string `json:"file_path"`
+		OutPath    string `json:"out_path"`
+		CertPEM    string `json:"cert_pem"`
+		KeyPEM     string `json:"key_pem"`
+		IsAPK      bool   `json:"is_apk"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, "mount not found", http.StatusNotFound)
+		return
+	}
+
+	if req.IsAPK {
+		res, err := signer.SignAPK(fsys, req.FilePath, req.OutPath, req.CertPEM, req.KeyPEM)
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.jsonResponse(w, http.StatusOK, res)
+		return
+	}
+
+	res, err := signer.SignDetached(fsys, req.FilePath, req.KeyPEM)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, res)
+}
+
+func (s *Server) handleSignVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Mount     string `json:"mount"`
+		FilePath  string `json:"file_path"`
+		Signature string `json:"signature"`
+		CertPEM   string `json:"cert_pem"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fsys, ok := s.mounts.Get(req.Mount)
+	if !ok {
+		s.jsonError(w, "mount not found", http.StatusNotFound)
+		return
+	}
+
+	valid, err := signer.VerifyDetached(fsys, req.FilePath, req.Signature, req.CertPEM)
+	if err != nil {
+		s.jsonResponse(w, http.StatusOK, map[string]interface{}{"valid": false, "error": err.Error()})
+		return
+	}
+	s.jsonResponse(w, http.StatusOK, map[string]interface{}{"valid": valid})
+}
+

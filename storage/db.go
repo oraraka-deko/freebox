@@ -24,10 +24,15 @@ var (
 
 // Standard bucket names
 var (
-	BucketUsers    = []byte("users")
-	BucketSessions = []byte("sessions")
-	BucketMounts   = []byte("mounts")
-	BucketSettings = []byte("settings")
+	BucketUsers        = []byte("users")
+	BucketSessions     = []byte("sessions")
+	BucketMounts       = []byte("mounts")
+	BucketSettings     = []byte("settings")
+	BucketTasks        = []byte("tasks")
+	BucketRemotes      = []byte("remotes")
+	BucketMeta         = []byte("meta")
+	BucketThumbnails   = []byte("thumbnails")
+	BucketCertificates = []byte("certificates")
 )
 
 // DB manages an encrypted BBolt embedded database.
@@ -63,7 +68,17 @@ func Open(cfg Config) (*DB, error) {
 	// Initialize buckets and retrieve/store master salt
 	var salt []byte
 	err = boltDB.Update(func(tx *bolt.Tx) error {
-		buckets := [][]byte{BucketUsers, BucketSessions, BucketMounts, BucketSettings}
+		buckets := [][]byte{
+			BucketUsers,
+			BucketSessions,
+			BucketMounts,
+			BucketSettings,
+			BucketTasks,
+			BucketRemotes,
+			BucketMeta,
+			BucketThumbnails,
+			BucketCertificates,
+		}
 		for _, b := range buckets {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err

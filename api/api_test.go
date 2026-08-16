@@ -210,4 +210,60 @@ func TestAPIServer_FullLifecycle(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("get servers status failed: status %v", resp.StatusCode)
 	}
+
+	// 10. Test Search API
+	searchBody, _ := json.Marshal(SearchAPIRequest{
+		Mount:          "src-mem",
+		RootPath:       "/",
+		ContentPattern: "API",
+	})
+	req, _ = authedRequest(http.MethodPost, ts.URL+"/api/search", session.Token, bytes.NewReader(searchBody))
+	resp, err = client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("search API failed: status %v", resp.StatusCode)
+	}
+
+	// 11. Test Metadata API
+	req, _ = authedRequest(http.MethodGet, ts.URL+"/api/meta?mount=src-mem&path=/test.txt", session.Token, nil)
+	resp, err = client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("meta GET API failed: status %v", resp.StatusCode)
+	}
+
+	// 12. Test Remotes API
+	remoteBody, _ := json.Marshal(map[string]interface{}{
+		"name":       "my-remote",
+		"type":       "mem",
+		"auto_mount": true,
+	})
+	req, _ = authedRequest(http.MethodPost, ts.URL+"/api/remotes", session.Token, bytes.NewReader(remoteBody))
+	resp, err = client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("remotes POST API failed: status %v", resp.StatusCode)
+	}
+
+	// 13. Test Cert API
+	certBody, _ := json.Marshal(map[string]interface{}{
+		"common_name":   "test.domain",
+		"validity_days": 30,
+	})
+	req, _ = authedRequest(http.MethodPost, ts.URL+"/api/cert/generate", session.Token, bytes.NewReader(certBody))
+	resp, err = client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("cert generate API failed: status %v", resp.StatusCode)
+	}
+
+	// 14. Test Dedup API
+	dedupBody, _ := json.Marshal(DedupAPIRequest{
+		Mount:    "src-mem",
+		RootPath: "/",
+		Method:   "meta",
+		Action:   "report",
+	})
+	req, _ = authedRequest(http.MethodPost, ts.URL+"/api/dedup", session.Token, bytes.NewReader(dedupBody))
+	resp, err = client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("dedup API failed: status %v", resp.StatusCode)
+	}
 }
+

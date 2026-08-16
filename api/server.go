@@ -10,9 +10,13 @@ import (
 
 	"freebox/api/ws"
 	"freebox/auth"
+	"freebox/cert"
 	"freebox/engine"
+	"freebox/meta"
 	"freebox/proxy"
+	"freebox/remotes"
 	"freebox/storage"
+	"freebox/thumbnail"
 	"freebox/vfs"
 )
 
@@ -24,6 +28,10 @@ type ServerConfig struct {
 	Mounts     *vfs.Registry
 	Engine     *engine.Engine
 	StreamServ *proxy.StreamServer
+	MetaMgr    *meta.Manager
+	RemotesMgr *remotes.Manager
+	ThumbMgr   *thumbnail.Engine
+	CertMgr    *cert.Manager
 }
 
 // Server handles all REST API and WebSocket communication for Freebox.
@@ -34,6 +42,10 @@ type Server struct {
 	mounts     *vfs.Registry
 	engine     *engine.Engine
 	streamServ *proxy.StreamServer
+	metaMgr    *meta.Manager
+	remotesMgr *remotes.Manager
+	thumbMgr   *thumbnail.Engine
+	certMgr    *cert.Manager
 	wsHub      *ws.Hub
 	httpServer *http.Server
 }
@@ -47,6 +59,10 @@ func NewServer(cfg ServerConfig) *Server {
 		mounts:     cfg.Mounts,
 		engine:     cfg.Engine,
 		streamServ: cfg.StreamServ,
+		metaMgr:    cfg.MetaMgr,
+		remotesMgr: cfg.RemotesMgr,
+		thumbMgr:   cfg.ThumbMgr,
+		certMgr:    cfg.CertMgr,
 	}
 
 	if s.mounts == nil {
@@ -54,6 +70,18 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 	if s.streamServ == nil && s.engine != nil {
 		s.streamServ = s.engine.StreamServer()
+	}
+	if s.metaMgr == nil {
+		s.metaMgr = meta.NewManager(cfg.StorageDB)
+	}
+	if s.remotesMgr == nil {
+		s.remotesMgr = remotes.NewManager(cfg.StorageDB, s.mounts)
+	}
+	if s.thumbMgr == nil {
+		s.thumbMgr = thumbnail.NewEngine(thumbnail.Config{MaxMemoryMB: 64})
+	}
+	if s.certMgr == nil {
+		s.certMgr = cert.NewManager(cfg.StorageDB)
 	}
 
 	// Initialize WebSocket Hub
@@ -79,13 +107,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/auth/logout", s.requireAuth(s.handleLogout))
 	mux.HandleFunc("/api/auth/me", s.requireAuth(s.handleAuthMe))
 
-	// Tasks
+	// Tasks & History
 	mux.HandleFunc("/api/tasks", s.requireAuth(s.handleTasks))
+	mux.HandleFunc("/api/tasks/history", s.requireAuth(s.handleTaskHistory))
 	mux.HandleFunc("/api/tasks/", s.requireAuth(s.handleTaskByID))
 
-	// Mounts (RemoteX2)
+	// Mounts & Remotes
 	mux.HandleFunc("/api/mounts", s.requireAuth(s.handleMounts))
 	mux.HandleFunc("/api/mounts/", s.requireAuth(s.handleMountByName))
+	mux.HandleFunc("/api/remotes", s.requireAuth(s.handleRemotes))
+	mux.HandleFunc("/api/remotes/test", s.requireAuth(s.handleRemoteTest))
+	mux.HandleFunc("/api/remotes/", s.requireAuth(s.handleRemoteByName))
+
+	// Search & Replace
+	mux.HandleFunc("/api/search", s.requireAuth(s.handleSearch))
+	mux.HandleFunc("/api/search/replace", s.requireAuth(s.handleSearchReplace))
+
+	// Deduplication
+	mux.HandleFunc("/api/dedup", s.requireAuth(s.handleDedup))
+
+	// Metadata & Permissions
+	mux.HandleFunc("/api/meta", s.requireAuth(s.handleMeta))
+
+	// Media Thumbnails
+	mux.HandleFunc("/api/thumbnail", s.requireAuth(s.handleThumbnail))
+
+	// Archive Operations
+	mux.HandleFunc("/api/archive/preview", s.requireAuth(s.handleArchivePreview))
+	mux.HandleFunc("/api/archive/create", s.requireAuth(s.handleArchiveCreate))
+	mux.HandleFunc("/api/archive/extract", s.requireAuth(s.handleArchiveExtract))
+
+	// Certificates
+	mux.HandleFunc("/api/cert/generate", s.requireAuth(s.handleCertGenerate))
+	mux.HandleFunc("/api/cert/list", s.requireAuth(s.handleCertList))
+
+	// Signer
+	mux.HandleFunc("/api/sign", s.requireAuth(s.handleSign))
+	mux.HandleFunc("/api/sign/verify", s.requireAuth(s.handleSignVerify))
 
 	// VFS Operations
 	mux.HandleFunc("/api/vfs/transfer", s.requireAuth(s.handleVFSTransfer))

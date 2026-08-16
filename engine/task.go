@@ -290,3 +290,55 @@ func (h *TaskHandle) Result() any {
 	defer h.mu.RUnlock()
 	return h.result
 }
+
+// TaskRecord represents serializable persistent state of a task in the database.
+type TaskRecord struct {
+	ID             string            `json:"id"`
+	Type           TaskType          `json:"type"`
+	Description    string            `json:"description"`
+	Status         TaskStatus        `json:"status"`
+	Priority       int               `json:"priority"`
+	SrcPath        string            `json:"src_path,omitempty"`
+	DstPath        string            `json:"dst_path,omitempty"`
+	BytesProcessed int64             `json:"bytes_processed"`
+	TotalBytes     int64             `json:"total_bytes"`
+	Percent        float64           `json:"percent"`
+	CurrentItem    string            `json:"current_item,omitempty"`
+	StartTime      time.Time         `json:"start_time"`
+	EndTime        time.Time         `json:"end_time,omitempty"`
+	Duration       time.Duration     `json:"duration"`
+	Error          string            `json:"error,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+}
+
+// ToRecord exports the task handle's current state to a TaskRecord.
+func (h *TaskHandle) ToRecord() TaskRecord {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	p := h.progress
+	errStr := ""
+	if p.Error != nil {
+		errStr = p.Error.Error()
+	}
+
+	return TaskRecord{
+		ID:             h.task.ID,
+		Type:           h.task.Type,
+		Description:    h.task.Description,
+		Status:         h.status,
+		Priority:       h.task.Priority,
+		SrcPath:        h.task.Params.SrcPath,
+		DstPath:        h.task.Params.DstPath,
+		BytesProcessed: p.BytesProcessed,
+		TotalBytes:     p.TotalBytes,
+		Percent:        p.Percent,
+		CurrentItem:    p.CurrentItem,
+		StartTime:      p.StartTime,
+		EndTime:        p.EndTime,
+		Duration:       p.Duration,
+		Error:          errStr,
+		Metadata:       h.task.Metadata,
+	}
+}
+

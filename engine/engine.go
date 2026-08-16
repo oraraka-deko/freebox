@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path"
@@ -19,6 +20,7 @@ import (
 	"freebox/proxy"
 	"freebox/smb"
 	"freebox/ssh"
+	"freebox/storage"
 	"freebox/vfs"
 )
 
@@ -26,6 +28,7 @@ import (
 type Engine struct {
 	queue        *TaskQueue
 	tasks        map[string]*TaskHandle
+	db           *storage.DB
 	streamServer *proxy.StreamServer
 	streamPort   string
 	servers      map[string]any
@@ -39,6 +42,7 @@ type Engine struct {
 type EngineConfig struct {
 	MaxWorkers int
 	StreamPort string
+	DB         *storage.DB
 }
 
 // DefaultEngineConfig returns default engine settings.
@@ -60,6 +64,7 @@ func NewEngine(cfg EngineConfig) *Engine {
 
 	e := &Engine{
 		tasks:        make(map[string]*TaskHandle),
+		db:           cfg.DB,
 		servers:      make(map[string]any),
 		streamServer: proxy.NewStreamServer(),
 		streamPort:   cfg.StreamPort,
@@ -91,6 +96,13 @@ func (e *Engine) StreamServer() *proxy.StreamServer {
 	return e.streamServer
 }
 
+// SetDB sets or updates the backing storage DB.
+func (e *Engine) SetDB(db *storage.DB) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.db = db
+}
+
 // Submit enqueues a task for asynchronous execution in the worker queue.
 func (e *Engine) Submit(task *Task) (*TaskHandle, error) {
 	if task.ID == "" {
@@ -103,8 +115,11 @@ func (e *Engine) Submit(task *Task) (*TaskHandle, error) {
 	e.tasks[task.ID] = handle
 	e.mu.Unlock()
 
+	e.saveTaskToDB(handle)
+
 	if err := e.queue.Enqueue(handle); err != nil {
 		handle.SetStatus(StatusFailed)
+		e.saveTaskToDB(handle)
 		return nil, err
 	}
 	return handle, nil
@@ -122,8 +137,54 @@ func (e *Engine) Execute(ctx context.Context, task *Task) (*TaskHandle, error) {
 	e.tasks[task.ID] = handle
 	e.mu.Unlock()
 
+	e.saveTaskToDB(handle)
+
 	err := e.processTask(handle)
 	return handle, err
+}
+
+func (e *Engine) saveTaskToDB(h *TaskHandle) {
+	if e.db == nil || h == nil {
+		return
+	}
+	rec := h.ToRecord()
+	data, err := json.Marshal(rec)
+	if err == nil {
+		_ = e.db.PutEncrypted(storage.BucketTasks, rec.ID, data)
+	}
+}
+
+// ListHistory retrieves persisted task history from the database.
+func (e *Engine) ListHistory() ([]TaskRecord, error) {
+	if e.db == nil {
+		return nil, nil
+	}
+
+	rawMap, err := e.db.ListDecrypted(storage.BucketTasks)
+	if err != nil {
+		return nil, err
+	}
+
+	var history []TaskRecord
+	for _, data := range rawMap {
+		var rec TaskRecord
+		if err := json.Unmarshal(data, &rec); err == nil {
+			history = append(history, rec)
+		}
+	}
+	return history, nil
+}
+
+// DeleteTask removes a task from tracking and database.
+func (e *Engine) DeleteTask(id string) error {
+	e.mu.Lock()
+	delete(e.tasks, id)
+	e.mu.Unlock()
+
+	if e.db != nil {
+		return e.db.Delete(storage.BucketTasks, id)
+	}
+	return nil
 }
 
 // GetTask returns the task handle by ID.
@@ -182,13 +243,17 @@ func (e *Engine) Close() {
 // --- Internal Task Processor ---
 
 func (e *Engine) processTask(h *TaskHandle) error {
-	defer close(h.doneChan)
+	defer func() {
+		e.saveTaskToDB(h)
+		close(h.doneChan)
+	}()
 
 	if h.Status() == StatusCanceled {
 		return context.Canceled
 	}
 
 	h.SetStatus(StatusRunning)
+	e.saveTaskToDB(h)
 	var err error
 
 	switch h.task.Type {
