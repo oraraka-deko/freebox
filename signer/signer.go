@@ -113,14 +113,20 @@ func VerifyDetached(fsys vfs.FileSystem, filePath string, signatureHex string, c
 		return false, errors.New("invalid certificate PEM")
 	}
 
+	var pubKey any
 	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return false, fmt.Errorf("failed parsing certificate: %w", err)
+	if err == nil {
+		pubKey = cert.PublicKey
+	} else {
+		pubKey, err = x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return false, fmt.Errorf("failed parsing certificate or public key: %w", err)
+		}
 	}
 
 	hash := sha256.Sum256(data)
 
-	switch pub := cert.PublicKey.(type) {
+	switch pub := pubKey.(type) {
 	case *rsa.PublicKey:
 		err = rsa.VerifyPKCS1v15(pub, crypto.SHA256, hash[:], sigBytes)
 		return err == nil, err
@@ -131,7 +137,7 @@ func VerifyDetached(fsys vfs.FileSystem, filePath string, signatureHex string, c
 		valid := ed25519.Verify(pub, data, sigBytes)
 		return valid, nil
 	default:
-		return false, fmt.Errorf("unsupported public key type: %T", cert.PublicKey)
+		return false, fmt.Errorf("unsupported public key type: %T", pubKey)
 	}
 }
 
