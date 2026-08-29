@@ -186,16 +186,8 @@ func Preview(fsys vfs.FileSystem, archivePath string, password string) ([]Archiv
 	archivePath = vfs.NormalizePath(archivePath)
 	atype := DetectType(archivePath)
 
-	data, err := fsys.Read(archivePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed reading archive %s: %w", archivePath, err)
-	}
-
-	readerAt := bytes.NewReader(data)
-
 	switch atype {
 	case TypeZip:
-		zr, err := zip.NewReader(readerAt, int64(len(data)))
 		rac, err := openArchiveReaderAt(fsys, archivePath)
 		if err != nil {
 			return nil, err
@@ -302,7 +294,6 @@ func Preview(fsys vfs.FileSystem, archivePath string, password string) ([]Archiv
 		var tr *tar.Reader
 		switch atype {
 		case TypeTarGz:
-			gr, err := gzip.NewReader(readerAt)
 			gr, err := gzip.NewReader(rc)
 			if err != nil {
 				return nil, err
@@ -310,10 +301,8 @@ func Preview(fsys vfs.FileSystem, archivePath string, password string) ([]Archiv
 			defer gr.Close()
 			tr = tar.NewReader(gr)
 		case TypeTarBz:
-			tr = tar.NewReader(bzip2.NewReader(readerAt))
 			tr = tar.NewReader(bzip2.NewReader(rc))
 		default:
-			tr = tar.NewReader(readerAt)
 			tr = tar.NewReader(rc)
 		}
 
@@ -349,18 +338,11 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 	targetDir = vfs.NormalizePath(targetDir)
 	atype := DetectType(archivePath)
 
-	data, err := fsys.Read(archivePath)
-	if err != nil {
-		return fmt.Errorf("failed reading archive %s: %w", archivePath, err)
-	}
 	buf := bufferpool.Acquire(64 * 1024)
 	defer bufferpool.Release(buf)
 
-	readerAt := bytes.NewReader(data)
-
 	switch atype {
 	case TypeZip:
-		zr, err := zip.NewReader(readerAt, int64(len(data)))
 		rac, err := openArchiveReaderAt(fsys, archivePath)
 		if err != nil {
 			return err
@@ -551,7 +533,6 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 		var tr *tar.Reader
 		switch atype {
 		case TypeTarGz:
-			gr, err := gzip.NewReader(readerAt)
 			gr, err := gzip.NewReader(rc)
 			if err != nil {
 				return err
@@ -559,10 +540,8 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 			defer gr.Close()
 			tr = tar.NewReader(gr)
 		case TypeTarBz:
-			tr = tar.NewReader(bzip2.NewReader(readerAt))
 			tr = tar.NewReader(bzip2.NewReader(rc))
 		default:
-			tr = tar.NewReader(readerAt)
 			tr = tar.NewReader(rc)
 		}
 

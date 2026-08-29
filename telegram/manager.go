@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +20,6 @@ import (
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/telegram/dcs"
 	"github.com/gotd/td/tg"
-	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/time/rate"
@@ -40,7 +40,7 @@ type Manager struct {
 
 // LoadConfigFromEnv reads Telegram config from environment variables or .env file.
 func LoadConfigFromEnv() AuthConfig {
-	_ = godotenv.Load()
+	loadDotEnv()
 
 	appIDStr := os.Getenv("APP_ID")
 	if appIDStr == "" {
@@ -63,6 +63,36 @@ func LoadConfigFromEnv() AuthConfig {
 		AppID:          appID,
 		AppHash:        appHash,
 		SessionBaseDir: sessionBaseDir,
+	}
+}
+
+func loadDotEnv() {
+	data, err := os.ReadFile(".env")
+	if err != nil {
+		return
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			value = value[1 : len(value)-1]
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, value)
+		}
 	}
 }
 
@@ -315,4 +345,3 @@ func (m *Manager) RunAccount(ctx context.Context, accountID int64, fn func(ctx c
 		return fn(cCtx, cs)
 	})
 }
-
