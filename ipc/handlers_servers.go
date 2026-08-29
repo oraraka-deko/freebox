@@ -50,7 +50,7 @@ func handleServersStartAPI(inst *Instance, conn *Conn, params json.RawMessage) (
 		RemotesMgr:  inst.RemotesMgr,
 		ThumbMgr:    inst.ThumbMgr,
 		CertMgr:     inst.CertMgr,
-		TelegramMgr: inst.TelegramMgr,
+	//	TelegramMgr: inst.TelegramMgr,
 	})
 	inst.APIServer = srv
 	go func() { _ = srv.Start() }()

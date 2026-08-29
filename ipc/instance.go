@@ -34,7 +34,7 @@ type Instance struct {
 	DB          *storage.DB
 	AuthMgr     *auth.Manager
 	Mounts      *vfs.Registry
-	TelegramMgr *telegram.Manager
+//	TelegramMgr *telegram.Manager
 	ThumbMgr    *thumbnail.Engine
 	MetaMgr     *meta.Manager
 	RemotesMgr  *remotes.Manager
@@ -99,9 +99,9 @@ func NewInstance(cfg InstanceConfig) (*Instance, error) {
 	}
 
 	baseDir := filepath.Dir(dbPath)
-	tgMgr, _ := telegram.NewManager(db, telegram.AuthConfig{
-		SessionBaseDir: filepath.Join(baseDir, "telegram"),
-	})
+//	tgMgr, _ := telegram.NewManager(db, telegram.AuthConfig{
+//		SessionBaseDir: filepath.Join(baseDir, "telegram"),
+//	})
 
 	thumbMgr := thumbnail.NewEngine(thumbnail.Config{
 		CacheDir:    filepath.Join(baseDir, "thumbnails"),
@@ -113,7 +113,7 @@ func NewInstance(cfg InstanceConfig) (*Instance, error) {
 		DB:          db,
 		AuthMgr:     authMgr,
 		Mounts:      reg,
-		TelegramMgr: tgMgr,
+	//	TelegramMgr: tgMgr,
 		ThumbMgr:    thumbMgr,
 		MetaMgr:     meta.NewManager(db),
 		RemotesMgr:  remotes.NewManager(db, reg),
