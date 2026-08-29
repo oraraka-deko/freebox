@@ -383,8 +383,9 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 				return fmt.Errorf("failed creating %s: %w", destPath, err)
 			}
 
+			encrypted := opts.Password != "" && (f.Flags&0x1) != 0
 			var srcStream io.Reader = rc
-			if opts.Password != "" && (f.Flags&0x1) != 0 {
+			if encrypted {
 				entryData, rErr := io.ReadAll(rc)
 				_ = rc.Close()
 				if rErr != nil {
@@ -397,7 +398,9 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 
 			_, copyErr := io.CopyBuffer(dstWriter, srcStream, buf)
 			_ = dstWriter.Close()
-			_ = rc.Close()
+			if !encrypted {
+				_ = rc.Close()
+			}
 			if copyErr != nil {
 				return fmt.Errorf("failed writing %s: %w", destPath, copyErr)
 			}
