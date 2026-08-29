@@ -68,7 +68,7 @@ func startLegacyAPIServer(inst *ipc.Instance, addr string) error {
 		RemotesMgr:  inst.RemotesMgr,
 		ThumbMgr:    inst.ThumbMgr,
 		CertMgr:     inst.CertMgr,
-		TelegramMgr: inst.TelegramMgr,
+	//	TelegramMgr: inst.TelegramMgr,
 	})
 	inst.APIServer = srv
 	go func() {

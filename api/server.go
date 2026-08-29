@@ -128,16 +128,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/remotes/", s.requireAuth(s.handleRemoteByName))
 
 	// Telegram Multi-Account & Auth
-	mux.HandleFunc("/api/telegram/accounts", s.requireAuth(s.handleTelegramAccounts))
-	mux.HandleFunc("/api/telegram/accounts/", s.requireAuth(s.handleTelegramAccountByID))
-	mux.HandleFunc("/api/telegram/auth/start", s.requireAuth(s.handleTelegramAuthStart))
-	mux.HandleFunc("/api/telegram/auth/code", s.requireAuth(s.handleTelegramAuthCode))
-	mux.HandleFunc("/api/telegram/auth/password", s.requireAuth(s.handleTelegramAuthPassword))
-	mux.HandleFunc("/api/telegram/auth/status", s.requireAuth(s.handleTelegramAuthStatus))
-	mux.HandleFunc("/api/telegram/messages/send", s.requireAuth(s.handleTelegramSendMessage))
-	mux.HandleFunc("/api/telegram/upload/url", s.requireAuth(s.handleTelegramUploadURL))
-	mux.HandleFunc("/api/telegram/upload/file", s.requireAuth(s.handleTelegramUploadFile))
-	mux.HandleFunc("/api/telegram/media/download", s.requireAuth(s.handleTelegramDownloadMedia))
+	// mux.HandleFunc("/api/telegram/accounts", s.requireAuth(s.handleTelegramAccounts))
+	// mux.HandleFunc("/api/telegram/accounts/", s.requireAuth(s.handleTelegramAccountByID))
+	// mux.HandleFunc("/api/telegram/auth/start", s.requireAuth(s.handleTelegramAuthStart))
+	// mux.HandleFunc("/api/telegram/auth/code", s.requireAuth(s.handleTelegramAuthCode))
+	// mux.HandleFunc("/api/telegram/auth/password", s.requireAuth(s.handleTelegramAuthPassword))
+	// mux.HandleFunc("/api/telegram/auth/status", s.requireAuth(s.handleTelegramAuthStatus))
+	// mux.HandleFunc("/api/telegram/messages/send", s.requireAuth(s.handleTelegramSendMessage))
+	// mux.HandleFunc("/api/telegram/upload/url", s.requireAuth(s.handleTelegramUploadURL))
+	// mux.HandleFunc("/api/telegram/upload/file", s.requireAuth(s.handleTelegramUploadFile))
+	// mux.HandleFunc("/api/telegram/media/download", s.requireAuth(s.handleTelegramDownloadMedia))
 
 	// Search & Replace
 	mux.HandleFunc("/api/search", s.requireAuth(s.handleSearch))
