@@ -13,7 +13,7 @@ import (
 	"freebox/meta"
 	"freebox/remotes"
 	"freebox/storage"
-	"freebox/telegram"
+//	"freebox/telegram"
 	"freebox/thumbnail"
 	"freebox/vfs"
 )
