@@ -283,6 +283,7 @@ func (c *TreeCache) SaveToDB(db *DB, mount string) error {
 		treeKey = "tree_all"
 	}
 
+	BucketVFSTree := []byte("vfs_tree")
 	return db.PutEncrypted(BucketVFSTree, treeKey, data)
 }
 
@@ -297,6 +298,7 @@ func (c *TreeCache) LoadFromDB(db *DB, mount string) error {
 		treeKey = "tree_all"
 	}
 
+	BucketVFSTree := []byte("vfs_tree")
 	data, err := db.GetDecrypted(BucketVFSTree, treeKey)
 	if err != nil {
 		return err

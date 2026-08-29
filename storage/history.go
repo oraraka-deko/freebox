@@ -73,6 +73,7 @@ func (s *TaskHistoryStore) AppendTask(rec TaskHistoryRecord) error {
 	}
 
 	key := taskHistoryKey(seq, rec.ID)
+	BucketHistory := []byte("task_history")
 	return s.db.PutEncrypted(BucketHistory, key, data)
 }
 
@@ -86,6 +87,7 @@ func (s *TaskHistoryStore) GetRecentTasks(limit int) ([]TaskHistoryRecord, error
 		limit = 20
 	}
 
+	BucketHistory := []byte("task_history")
 	rawMap, err := s.db.ListDecrypted(BucketHistory)
 	if err != nil {
 		return nil, err
@@ -117,6 +119,7 @@ func (s *TaskHistoryStore) GetTask(id string) (*TaskHistoryRecord, error) {
 		return nil, ErrNotFound
 	}
 
+	BucketHistory := []byte("task_history")
 	rawMap, err := s.db.ListDecrypted(BucketHistory)
 	if err != nil {
 		return nil, err
@@ -139,6 +142,7 @@ func (s *TaskHistoryStore) Count() (int, error) {
 	if s.db == nil {
 		return 0, nil
 	}
+	BucketHistory := []byte("task_history")
 	rawMap, err := s.db.ListDecrypted(BucketHistory)
 	if err != nil {
 		return 0, err
@@ -151,6 +155,7 @@ func (s *TaskHistoryStore) Clear() error {
 	if s.db == nil {
 		return nil
 	}
+	BucketHistory := []byte("task_history")
 	rawMap, err := s.db.List(BucketHistory)
 	if err != nil {
 		return err
@@ -214,6 +219,7 @@ func (c *ClipboardHistoryStore) SaveStage(items []ClipboardItemRecord) (string, 
 	}
 
 	key := fmt.Sprintf("%020d", seq)
+	BucketClipboardHistory := []byte("clipboard_history")
 	if err := c.db.PutEncrypted(BucketClipboardHistory, key, data); err != nil {
 		return "", err
 	}
@@ -230,6 +236,7 @@ func (c *ClipboardHistoryStore) GetRecentStages(limit int) ([]ClipboardStageReco
 		limit = 10
 	}
 
+	BucketClipboardHistory := []byte("clipboard_history")
 	rawMap, err := c.db.ListDecrypted(BucketClipboardHistory)
 	if err != nil {
 		return nil, err
@@ -271,6 +278,7 @@ func (c *ClipboardHistoryStore) Clear() error {
 	if c.db == nil {
 		return nil
 	}
+	BucketClipboardHistory := []byte("clipboard_history")
 	rawMap, err := c.db.List(BucketClipboardHistory)
 	if err != nil {
 		return err

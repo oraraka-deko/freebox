@@ -1,11 +1,11 @@
 name: freebox_bridge
-description: Dart & Flutter FFI bridge for Freebox Go CGO native engine.
-version: 1.0.0
+description: Dart client for the Freebox IPC socket (JSON-RPC control plane + fast binary transfer channel).
+version: 2.0.0
 environment:
   sdk: '>=3.0.0 <4.0.0'
 
-dependencies:
-  ffi: ^2.1.0
+dependencies: {}
 
 dev_dependencies:
   lints: ^3.0.0
+  test: ^1.24.0

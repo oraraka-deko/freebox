@@ -25,24 +25,18 @@ var (
 
 // Standard bucket names
 var (
-	BucketUsers            = []byte("users")
-	BucketSessions         = []byte("sessions")
-	BucketMounts           = []byte("mounts")
-	BucketSettings         = []byte("settings")
-	BucketTasks            = []byte("tasks")
-	BucketRemotes          = []byte("remotes")
-	BucketMeta             = []byte("meta")
-	BucketThumbnails       = []byte("thumbnails")
-	BucketCertificates     = []byte("certificates")
-	BucketTelegram         = []byte("telegram")
-	BucketTransfers        = []byte("transfers")
-	BucketTransferLog      = []byte("transfer_log")
-	BucketHistory          = []byte("history")
-	BucketClipboardHistory = []byte("clipboard_history")
-	BucketVFSTree          = []byte("vfs_tree")
-	BucketVFSHeaders       = []byte("vfs_headers")
-	BucketMediaCache       = []byte("media_cache")
-	BucketEditDrafts       = []byte("edit_drafts")
+	BucketUsers        = []byte("users")
+	BucketSessions     = []byte("sessions")
+	BucketMounts       = []byte("mounts")
+	BucketSettings     = []byte("settings")
+	BucketTasks        = []byte("tasks")
+	BucketRemotes      = []byte("remotes")
+	BucketMeta         = []byte("meta")
+	BucketThumbnails   = []byte("thumbnails")
+	BucketCertificates = []byte("certificates")
+	BucketTelegram     = []byte("telegram")
+	BucketTransfers    = []byte("transfers")
+	BucketTransferLog  = []byte("transfer_log")
 )
 
 // DB manages an encrypted BBolt embedded database.
@@ -91,12 +85,6 @@ func Open(cfg Config) (*DB, error) {
 			BucketTelegram,
 			BucketTransfers,
 			BucketTransferLog,
-			BucketHistory,
-			BucketClipboardHistory,
-			BucketVFSTree,
-			BucketVFSHeaders,
-			BucketMediaCache,
-			BucketEditDrafts,
 		}
 		for _, b := range buckets {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {

@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"path"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,28 +18,6 @@ var (
 	ErrTransferPaused   = errors.New("transfer paused")
 	ErrTransferCanceled = errors.New("transfer canceled")
 )
-
-// isNetworkDisconnect checks if an error was caused by a transient network drop.
-func isNetworkDisconnect(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection") ||
-		strings.Contains(msg, "reset") ||
-		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "refused") ||
-		strings.Contains(msg, "network") ||
-		strings.Contains(msg, "disconnect")
-}
 
 // TransferState represents current state of a resumable transfer session.
 type TransferState string
@@ -222,10 +198,6 @@ func (t *ResumableTransfer) Start() error {
 		if n > 0 {
 			written, err := writer.Write(buf[:n])
 			if err != nil {
-				if isNetworkDisconnect(err) {
-					t.PauseWithReason("network_disconnect", err.Error())
-					continue
-				}
 				t.fail(err)
 				return fmt.Errorf("write error: %w", err)
 			}
@@ -251,10 +223,6 @@ func (t *ResumableTransfer) Start() error {
 		if rErr != nil {
 			if rErr == io.EOF {
 				break
-			}
-			if isNetworkDisconnect(rErr) {
-				t.PauseWithReason("network_disconnect", rErr.Error())
-				continue
 			}
 			t.fail(rErr)
 			return rErr
@@ -284,63 +252,11 @@ func (t *ResumableTransfer) Pause() {
 	t.mu.Unlock()
 }
 
-// PauseWithReason pauses the transfer with an explanatory message (e.g. network disconnect).
-func (t *ResumableTransfer) PauseWithReason(reason, detail string) {
-	t.mu.Lock()
-	t.checkpoint.State = StatePaused
-	if detail != "" {
-		t.checkpoint.Error = reason + ": " + detail
-	} else {
-		t.checkpoint.Error = reason
-	}
-	t.checkpoint.LastActive = time.Now()
-	cb := t.onProgress
-	snapshot := t.checkpoint
-	t.mu.Unlock()
-
-	if cb != nil {
-		cb(snapshot)
-	}
-}
-
-// AutoResume monitors network connectivity and automatically resumes the transfer when online.
-func (t *ResumableTransfer) AutoResume(ctx context.Context, checkInterval time.Duration, isOnline func() bool) {
-	if checkInterval <= 0 {
-		checkInterval = 1 * time.Second
-	}
-	go func() {
-		ticker := time.NewTicker(checkInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.cancelCtx.Done():
-				return
-			case <-ticker.C:
-				t.mu.RLock()
-				state := t.checkpoint.State
-				t.mu.RUnlock()
-
-				if state == StateCompleted || state == StateCanceled || state == StateFailed {
-					return
-				}
-
-				if state == StatePaused && (isOnline == nil || isOnline()) {
-					t.Resume()
-				}
-			}
-		}
-	}()
-}
-
 // Resume resumes a paused transfer.
 func (t *ResumableTransfer) Resume() {
 	t.mu.Lock()
 	if t.checkpoint.State == StatePaused {
 		t.checkpoint.State = StateRunning
-		t.checkpoint.Error = ""
 		select {
 		case t.resumeChan <- struct{}{}:
 		default:

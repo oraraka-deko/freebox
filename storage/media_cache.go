@@ -120,6 +120,7 @@ func (c *MediaCache) PutArchivePreview(archiveKey string, entriesJSON []byte) {
 	defer c.mu.Unlock()
 	c.archiveMeta[archiveKey] = entriesJSON
 	if c.db != nil {
+		BucketMediaCache :=  []byte("media_cache")
 		_ = c.db.PutEncrypted(BucketMediaCache, "archive:"+archiveKey, entriesJSON)
 	}
 }
@@ -134,6 +135,7 @@ func (c *MediaCache) GetArchivePreview(archiveKey string) ([]byte, bool) {
 	c.mu.RUnlock()
 
 	if c.db != nil {
+		BucketMediaCache :=  []byte("media_cache")
 		data, err := c.db.GetDecrypted(BucketMediaCache, "archive:"+archiveKey)
 		if err == nil && len(data) > 0 {
 			c.mu.Lock()
@@ -174,6 +176,7 @@ func (c *MediaCache) SaveEditDraft(draft EditDraft) error {
 		if err != nil {
 			return err
 		}
+		BucketEditDrafts := []byte("edit_drafts")
 		return c.db.PutEncrypted(BucketEditDrafts, draft.SessionID, data)
 	}
 
@@ -190,6 +193,7 @@ func (c *MediaCache) GetEditDraft(sessionID string) (*EditDraft, bool) {
 	c.mu.RUnlock()
 
 	if c.db != nil {
+		BucketEditDrafts := []byte("edit_drafts")
 		data, err := c.db.GetDecrypted(BucketEditDrafts, sessionID)
 		if err == nil {
 			var d EditDraft
@@ -216,6 +220,7 @@ func (c *MediaCache) ListEditDrafts() ([]EditDraft, error) {
 	}
 
 	if c.db != nil {
+		BucketEditDrafts := []byte("edit_drafts")
 		rawMap, err := c.db.ListDecrypted(BucketEditDrafts)
 		if err == nil {
 			for _, data := range rawMap {
@@ -243,6 +248,7 @@ func (c *MediaCache) DeleteEditDraft(sessionID string) error {
 	c.mu.Unlock()
 
 	if c.db != nil {
+		BucketEditDrafts := []byte("edit_drafts")
 		return c.db.Delete(BucketEditDrafts, sessionID)
 	}
 	return nil

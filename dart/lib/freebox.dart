@@ -1,552 +1,304 @@
-library freebox;
+/// High-level Freebox client: connects to the freeboxd IPC socket and
+/// exposes one method per RPC category, delegating everything to JSON-RPC
+/// calls over [IpcClient] instead of FFI/cgo marshaling.
+library;
 
+import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi' as ffi;
 import 'dart:typed_data';
-import 'package:ffi/ffi.dart';
-import 'src/bindings.dart';
-import 'src/types.dart';
-import 'src/async_bridge.dart';
 
-export 'src/types.dart'
-    show
-        TaskType,
-        TaskStatus,
-        TaskProgress,
-        FileInfo,
-        MediaMeta,
-        ServerType,
-        ArchiveFormat,
-        DedupMethod,
-        DedupAction,
-        DedupKeepPolicy,
-        SearchMatchType,
-        SearchTarget;
+import 'src/ipc_client.dart';
+import 'src/transfer_client.dart';
+import 'src/types.dart';
+
+export 'src/types.dart';
+export 'src/ipc_client.dart' show IpcNotification, IpcException;
+export 'src/transfer_client.dart' show TransferClient;
 
 class FreeboxClient {
-  late final FreeboxBindings _bindings;
-  late final AsyncDartBridge _asyncBridge;
-  int _engineHandle = 0;
+  final IpcClient _ipc;
+  final TransferClient _transfers;
 
-  FreeboxClient(String dynamicLibraryPath) {
-    final lib = ffi.DynamicLibrary.open(dynamicLibraryPath);
-    _bindings = FreeboxBindings(lib);
-    _asyncBridge = AsyncDartBridge(_bindings);
+  FreeboxClient._(this._ipc, this._transfers);
+
+  /// Connects to a freeboxd Unix domain socket, e.g. "/run/freebox/freebox.sock".
+  static Future<FreeboxClient> connectUnix(String socketPath) async {
+    final ipc = await IpcClient.connectUnix(socketPath);
+    return FreeboxClient._(ipc, TransferClient.unix(socketPath));
   }
 
-  /// Initializes the Freebox Go engine with DB path and passphrase.
-  void initEngine({
-    String dbPath = './data/freebox.db',
-    String passphrase = 'freebox-secret-passphrase',
-    int maxWorkers = 4,
-    String streamPort = ':8090',
-  }) {
-    using((Arena arena) {
-      final dbPathPtr = dbPath.toNativeBytes(arena);
-      final passPtr = passphrase.toNativeBytes(arena);
-      final streamPortPtr = streamPort.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-
-      final handle = _bindings.initEngine(
-        dbPathPtr,
-        dbPath.length,
-        passPtr,
-        passphrase.length,
-        maxWorkers,
-        streamPortPtr,
-        streamPort.length,
-        resultPtr,
-      );
-
-      if (handle == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed initializing Freebox engine: $err');
-      }
-
-      _engineHandle = handle;
-      _bindings.registerDartPort(_engineHandle, _asyncBridge.nativePort);
-    });
+  /// Connects to a freeboxd TCP loopback fallback, e.g. 127.0.0.1:9191.
+  static Future<FreeboxClient> connectTcp(String host, int port) async {
+    final ipc = await IpcClient.connectTcp(host, port);
+    return FreeboxClient._(ipc, TransferClient.tcp(host, port));
   }
 
-  /// Real-time stream of task progress updates sent from Go worker queue
-  Stream<TaskProgress> get taskProgressStream => _asyncBridge.progressStream;
+  Future<void> close() => _ipc.close();
 
-  /// Submits a task using byte buffer parameters (zero C-string allocation)
-  int submitTaskBytes({
-    required TaskType type,
-    required String srcPath,
-    String dstPath = '',
+  /// Stream of task.progress / task.status / transfer.* notifications.
+  Stream<IpcNotification> get notifications => _ipc.notifications;
+
+  /// Stream of just task.progress and task.status, decoded as [TaskProgress].
+  Stream<TaskProgress> get taskProgressStream => _ipc.notifications
+      .where((n) => n.method == 'task.progress' || n.method == 'task.status')
+      .map((n) => TaskProgress.fromJson(n.params as Map<String, dynamic>));
+
+  // ---- VFS ----
+
+  Future<void> mount(String name, String type, String path, {bool readOnly = false}) async {
+    await _ipc.call('vfs.mount', {'name': name, 'type': type, 'path': path, 'readOnly': readOnly});
+  }
+
+  Future<void> unmount(String name) async {
+    await _ipc.call('vfs.unmount', {'name': name});
+  }
+
+  Future<List<FileInfo>> listDir(String path) async {
+    final result = await _ipc.call('vfs.listDir', {'path': path}) as List<dynamic>;
+    return result.map((e) => FileInfo.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Reads a whole small file inline. For large files, prefer [transferRead].
+  Future<Uint8List> readFile(String path) async {
+    final result = await _ipc.call('vfs.readFile', {'path': path}) as Map<String, dynamic>;
+    return base64Decode(result['data'] as String);
+  }
+
+  /// Writes a whole small file inline. For large files, prefer [transferWrite].
+  Future<void> writeFile(String path, List<int> data) async {
+    await _ipc.call('vfs.writeFile', {'path': path, 'data': base64Encode(data)});
+  }
+
+  // ---- Fast file transfer ----
+
+  /// Opens a fast read transfer and returns a byte stream for [path].
+  Future<Stream<List<int>>> transferRead(String path, {int offset = 0}) async {
+    final result = await _ipc.call('transfer.open', {'mode': 'read', 'path': path, 'offset': offset}) as Map<String, dynamic>;
+    return _transfers.read(result['token'] as String);
+  }
+
+  /// Opens a fast write transfer and streams [data] into [path].
+  Future<void> transferWrite(String path, Stream<List<int>> data) async {
+    final result = await _ipc.call('transfer.open', {'mode': 'write', 'path': path}) as Map<String, dynamic>;
+    await _transfers.write(result['token'] as String, data);
+  }
+
+  Future<bool> transferClose(String transferId) async {
+    final result = await _ipc.call('transfer.close', {'transferId': transferId}) as Map<String, dynamic>;
+    return result['closed'] as bool;
+  }
+
+  // ---- Tasks ----
+
+  Future<String> submitTask({
+    required String type,
+    required String src,
+    String dst = '',
     List<int>? data,
     int priority = 0,
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-
-    return using((Arena arena) {
-      final srcPtr = srcPath.toNativeBytes(arena);
-      final dstPtr = dstPath.toNativeBytes(arena);
-
-      ffi.Pointer<ffi.Uint8> dataPtr = ffi.nullptr;
-      int dataLen = 0;
-      if (data != null && data.isNotEmpty) {
-        dataPtr = arena<ffi.Uint8>(data.length);
-        dataPtr.asTypedList(data.length).setAll(0, data);
-        dataLen = data.length;
-      }
-
-      final resultPtr = arena<FreeboxResultC>();
-      final taskId = _bindings.submitTaskBytes(
-        _engineHandle,
-        type.code,
-        srcPtr,
-        srcPath.length,
-        dstPtr,
-        dstPath.length,
-        dataPtr,
-        dataLen,
-        priority,
-        _asyncBridge.nativePort,
-        resultPtr,
-      );
-
-      if (taskId == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed submitting task: $err');
-      }
-
-      return taskId;
-    });
+  }) async {
+    final result = await _ipc.call('tasks.submit', {
+      'type': type,
+      'src': src,
+      'dst': dst,
+      if (data != null) 'data': base64Encode(data),
+      'priority': priority,
+    }) as Map<String, dynamic>;
+    return result['taskId'] as String;
   }
 
-  /// Submits a task using UTF-32 rune array parameters
-  int submitTaskRunes({
-    required TaskType type,
-    required String srcPath,
-    String dstPath = '',
-    int priority = 0,
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
+  Future<void> pauseTask(String taskId) async => _ipc.call('tasks.pause', {'taskId': taskId});
+  Future<void> resumeTask(String taskId) async => _ipc.call('tasks.resume', {'taskId': taskId});
+  Future<void> cancelTask(String taskId) async => _ipc.call('tasks.cancel', {'taskId': taskId});
 
-    return using((Arena arena) {
-      final srcRunes = srcPath.runes.toList();
-      final dstRunes = dstPath.runes.toList();
-
-      final srcRunesPtr = srcPath.toNativeRunes(arena);
-      final dstRunesPtr = dstPath.toNativeRunes(arena);
-
-      final resultPtr = arena<FreeboxResultC>();
-      final taskId = _bindings.submitTaskRunes(
-        _engineHandle,
-        type.code,
-        srcRunesPtr,
-        srcRunes.length,
-        dstRunesPtr,
-        dstRunes.length,
-        priority,
-        _asyncBridge.nativePort,
-        resultPtr,
-      );
-
-      if (taskId == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed submitting task with runes: $err');
-      }
-
-      return taskId;
-    });
+  Future<TaskProgress> getTaskProgress(String taskId) async {
+    final result = await _ipc.call('tasks.getProgress', {'taskId': taskId}) as Map<String, dynamic>;
+    return TaskProgress.fromJson(result);
   }
 
-  /// Clipboard Operations
-  bool clipboardCopy(String path) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final pPtr = path.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-      return _bindings.clipboardCopy(_engineHandle, pPtr, path.length, resultPtr) != 0;
-    });
+  Future<Map<String, dynamic>> getTaskRecord(String taskId) async {
+    return await _ipc.call('tasks.getRecord', {'taskId': taskId}) as Map<String, dynamic>;
   }
 
-  bool clipboardCut(String path) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final pPtr = path.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-      return _bindings.clipboardCut(_engineHandle, pPtr, path.length, resultPtr) != 0;
-    });
+  // ---- Clipboard ----
+
+  Future<int> clipboardCopy(String path) async {
+    final result = await _ipc.call('clipboard.copy', {'path': path}) as Map<String, dynamic>;
+    return (result['count'] as num).toInt();
   }
 
-  int clipboardPaste(String dstDir) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final dPtr = dstDir.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-      final tID = _bindings.clipboardPaste(_engineHandle, dPtr, dstDir.length, _asyncBridge.nativePort, resultPtr);
-      if (tID == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed pasting clipboard: $err');
-      }
-      return tID;
-    });
+  Future<int> clipboardCut(String path) async {
+    final result = await _ipc.call('clipboard.cut', {'path': path}) as Map<String, dynamic>;
+    return (result['count'] as num).toInt();
   }
 
-  void clipboardClear() {
-    if (_engineHandle != 0) {
-      _bindings.clipboardClear(_engineHandle);
-    }
+  Future<List<String>> clipboardPaste(String dst) async {
+    final result = await _ipc.call('clipboard.paste', {'dst': dst}) as Map<String, dynamic>;
+    return (result['taskIds'] as List<dynamic>).cast<String>();
   }
 
-  int get clipboardCount {
-    if (_engineHandle == 0) return 0;
-    return _bindings.clipboardCount(_engineHandle);
+  Future<void> clipboardClear() async => _ipc.call('clipboard.clear');
+
+  Future<int> get clipboardCount async {
+    final result = await _ipc.call('clipboard.count') as Map<String, dynamic>;
+    return (result['count'] as num).toInt();
   }
 
-  /// Deduplication Scan
-  int deduplicate({
-    required String rootPath,
-    DedupMethod method = DedupMethod.quick,
-    DedupAction action = DedupAction.report,
-    DedupKeepPolicy keepPolicy = DedupKeepPolicy.oldest,
-    int minSize = 1,
-    int maxWorkers = 4,
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final rPtr = rootPath.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-      final tID = _bindings.dedupScan(
-        _engineHandle,
-        rPtr,
-        rootPath.length,
-        method.code,
-        action.code,
-        keepPolicy.code,
-        minSize,
-        maxWorkers,
-        _asyncBridge.nativePort,
-        resultPtr,
-      );
-      if (tID == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed starting dedup scan: $err');
-      }
-      return tID;
-    });
-  }
+  // ---- Search / Dedup ----
 
-  /// Search & Replace
-  int search({
+  Future<String> search({
     required String rootPath,
     String namePattern = '',
     String contentPattern = '',
     String replacement = '',
-    SearchMatchType matchType = SearchMatchType.substring,
-    SearchTarget target = SearchTarget.all,
+    String matchType = SearchMatchType.substring,
+    String target = SearchTarget.all,
     bool isReplace = false,
     bool caseSensitive = false,
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final rPtr = rootPath.toNativeBytes(arena);
-      final nPtr = namePattern.toNativeBytes(arena);
-      final cPtr = contentPattern.toNativeBytes(arena);
-      final repPtr = replacement.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-
-      final tID = _bindings.search(
-        _engineHandle,
-        rPtr,
-        rootPath.length,
-        nPtr,
-        namePattern.length,
-        cPtr,
-        contentPattern.length,
-        repPtr,
-        replacement.length,
-        matchType.code,
-        target.code,
-        isReplace ? 1 : 0,
-        caseSensitive ? 1 : 0,
-        _asyncBridge.nativePort,
-        resultPtr,
-      );
-
-      if (tID == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed starting search/replace: $err');
-      }
-      return tID;
-    });
+  }) async {
+    final result = await _ipc.call('search.run', {
+      'rootPath': rootPath,
+      'namePattern': namePattern,
+      'contentPattern': contentPattern,
+      'replacement': replacement,
+      'matchType': matchType,
+      'target': target,
+      'isReplace': isReplace,
+      'caseSensitive': caseSensitive,
+    }) as Map<String, dynamic>;
+    return result['taskId'] as String;
   }
 
-  /// Archive Operations
-  int compressArchive({
-    required ArchiveFormat format,
-    required String srcPath,
-    required String dstPath,
+  Future<String> deduplicate({
+    required String rootPath,
+    String method = DedupMethod.quickHash,
+    String action = DedupAction.report,
+    String keepPolicy = DedupKeepPolicy.oldest,
+    int minSize = 1,
+    int maxWorkers = 4,
+  }) async {
+    final result = await _ipc.call('dedup.scan', {
+      'rootPath': rootPath,
+      'method': method,
+      'action': action,
+      'keepPolicy': keepPolicy,
+      'minSize': minSize,
+      'maxWorkers': maxWorkers,
+    }) as Map<String, dynamic>;
+    return result['taskId'] as String;
+  }
+
+  // ---- Archive ----
+
+  Future<String> compressArchive({
+    required String format,
+    required String src,
+    required String dst,
     String password = '',
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final sPtr = srcPath.toNativeBytes(arena);
-      final dPtr = dstPath.toNativeBytes(arena);
-      final pPtr = password.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
+  }) async {
+    final result = await _ipc.call('archive.compress', {
+      'format': format,
+      'src': src,
+      'dst': dst,
+      'password': password,
+    }) as Map<String, dynamic>;
+    return result['taskId'] as String;
+  }
 
-      final tID = _bindings.archiveCompress(
-        _engineHandle,
-        format.code,
-        sPtr,
-        srcPath.length,
-        dPtr,
-        dstPath.length,
-        pPtr,
-        password.length,
-        _asyncBridge.nativePort,
-        resultPtr,
-      );
+  Future<String> extractArchive({required String src, required String dst, String password = ''}) async {
+    final result = await _ipc.call('archive.extract', {'src': src, 'dst': dst, 'password': password}) as Map<String, dynamic>;
+    return result['taskId'] as String;
+  }
 
-      if (tID == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed compressing archive: $err');
-      }
-      return tID;
+  Future<List<dynamic>> previewArchive(String path, {String password = ''}) async {
+    return await _ipc.call('archive.preview', {'path': path, 'password': password}) as List<dynamic>;
+  }
+
+  // ---- Media ----
+
+  Future<Uint8List> generateThumbnail(String path, {int width = 256, int height = 256, int quality = 80}) async {
+    final result = await _ipc.call('media.generateThumbnail', {
+      'path': path,
+      'width': width,
+      'height': height,
+      'quality': quality,
+    }) as Map<String, dynamic>;
+    return base64Decode(result['data'] as String);
+  }
+
+  Future<Map<String, dynamic>> extractMetadata(String path) async {
+    return await _ipc.call('media.extractMetadata', {'path': path}) as Map<String, dynamic>;
+  }
+
+  // ---- Streams ----
+
+  Future<void> registerStream(String name, String url) async => _ipc.call('streams.register', {'name': name, 'url': url});
+  Future<void> unregisterStream(String name) async => _ipc.call('streams.unregister', {'name': name});
+
+  // ---- Crypto ----
+
+  Future<String> signFile(String path, String privKeyPem) async {
+    final result = await _ipc.call('crypto.signFile', {'path': path, 'privKeyPem': privKeyPem}) as Map<String, dynamic>;
+    return result['signatureHex'] as String;
+  }
+
+  Future<bool> verifyFileSignature(String path, String sigHex, String pubKeyPem) async {
+    final result = await _ipc
+        .call('crypto.verifyFileSignature', {'path': path, 'sigHex': sigHex, 'pubKeyPem': pubKeyPem}) as Map<String, dynamic>;
+    return result['valid'] as bool;
+  }
+
+  // ---- Google Drive ----
+
+  Future<Map<String, dynamic>> gdriveAuthorize({
+    required String clientId,
+    required String clientSecret,
+    List<int>? credentialsJson,
+    int port = 0,
+    String callbackPath = '',
+  }) async {
+    return await _ipc.call('gdrive.authorize', {
+      'clientId': clientId,
+      'clientSecret': clientSecret,
+      if (credentialsJson != null) 'credentialsJson': base64Encode(credentialsJson),
+      'port': port,
+      'callbackPath': callbackPath,
+    }) as Map<String, dynamic>;
+  }
+
+  Future<void> gdriveMount({
+    required String mountName,
+    required String clientId,
+    required String clientSecret,
+    required List<int> tokenJson,
+    String rootFolderId = '',
+  }) async {
+    await _ipc.call('gdrive.mount', {
+      'mountName': mountName,
+      'clientId': clientId,
+      'clientSecret': clientSecret,
+      'tokenJson': base64Encode(tokenJson),
+      'rootFolderId': rootFolderId,
     });
   }
 
-  int extractArchive({
-    required String srcArchive,
-    required String dstDir,
-    String password = '',
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final sPtr = srcArchive.toNativeBytes(arena);
-      final dPtr = dstDir.toNativeBytes(arena);
-      final pPtr = password.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
+  // ---- Telegram ----
 
-      final tID = _bindings.archiveExtract(
-        _engineHandle,
-        sPtr,
-        srcArchive.length,
-        dPtr,
-        dstDir.length,
-        pPtr,
-        password.length,
-        _asyncBridge.nativePort,
-        resultPtr,
-      );
+  Future<List<dynamic>> telegramListSessions() async => await _ipc.call('telegram.listSessions') as List<dynamic>;
 
-      if (tID == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed extracting archive: $err');
-      }
-      return tID;
-    });
-  }
+  Future<void> telegramRemoveSession(int accountId) async => _ipc.call('telegram.removeSession', {'accountId': accountId});
 
-  int previewArchive({
-    required String archivePath,
-    String password = '',
-  }) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final aPtr = archivePath.toNativeBytes(arena);
-      final pPtr = password.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
+  // ---- Servers ----
 
-      final count = _bindings.archivePreview(_engineHandle, aPtr, archivePath.length, pPtr, password.length, resultPtr);
-      return count;
-    });
-  }
-
-  /// Thumbnail Generation
-  Uint8List generateThumbnail(String srcPath, {int width = 256, int height = 256, int quality = 80}) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final sPtr = srcPath.toNativeBytes(arena);
-      final outDataPtr = arena<ffi.Pointer<ffi.Uint8>>();
-      final outLenPtr = arena<ffi.Int32>();
-      final resultPtr = arena<FreeboxResultC>();
-
-      final ok = _bindings.generateThumbnail(
-        _engineHandle,
-        sPtr,
-        srcPath.length,
-        width,
-        height,
-        quality,
-        outDataPtr,
-        outLenPtr,
-        resultPtr,
-      );
-
-      if (ok == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed generating thumbnail: $err');
-      }
-
-      final len = outLenPtr.value;
-      final ptr = outDataPtr.value;
-      if (ptr == ffi.nullptr || len <= 0) return Uint8List(0);
-
-      final resultBytes = Uint8List.fromList(ptr.asTypedList(len));
-      _bindings.freeBuffer(ptr.cast<ffi.Void>());
-      return resultBytes;
-    });
-  }
-
-  /// Metadata Extraction
-  MediaMeta extractMetadata(String srcPath) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final sPtr = srcPath.toNativeBytes(arena);
-      final metaPtr = arena<FreeboxMediaMetaC>();
-      final resultPtr = arena<FreeboxResultC>();
-
-      final ok = _bindings.extractMetadata(_engineHandle, sPtr, srcPath.length, metaPtr, resultPtr);
-      if (ok == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed extracting metadata: $err');
-      }
-
-      return MediaMeta(
-        title: metaPtr.ref.title.toDartString(),
-        format: metaPtr.ref.format.toDartString(),
-        width: metaPtr.ref.width,
-        height: metaPtr.ref.height,
-        durationMs: metaPtr.ref.durationMs,
-        bitrate: metaPtr.ref.bitrate,
-      );
-    });
-  }
-
-  /// Signer
-  String signFile(String filePath, String privKeyPEM) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final fPtr = filePath.toNativeBytes(arena);
-      final kPtr = privKeyPEM.toNativeBytes(arena);
-      final outSigPtr = arena<ffi.Pointer<ffi.Uint8>>();
-      final outLenPtr = arena<ffi.Int32>();
-      final resultPtr = arena<FreeboxResultC>();
-
-      final ok = _bindings.signFile(
-        _engineHandle,
-        fPtr,
-        filePath.length,
-        kPtr,
-        privKeyPEM.length,
-        outSigPtr,
-        outLenPtr,
-        resultPtr,
-      );
-
-      if (ok == 0 || resultPtr.ref.success == 0) {
-        final err = resultPtr.ref.errorMsg.toDartString();
-        throw StateError('Failed signing file: $err');
-      }
-
-      final len = outLenPtr.value;
-      final ptr = outSigPtr.value;
-      if (ptr == ffi.nullptr || len <= 0) return '';
-      final sig = utf8.decode(ptr.asTypedList(len));
-      _bindings.freeBuffer(ptr.cast<ffi.Void>());
-      return sig;
-    });
-  }
-
-  bool verifyFileSignature(String filePath, String sigHex, String pubKeyPEM) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final fPtr = filePath.toNativeBytes(arena);
-      final sPtr = sigHex.toNativeBytes(arena);
-      final kPtr = pubKeyPEM.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-
-      final ok = _bindings.verifyFileSignature(
-        _engineHandle,
-        fPtr,
-        filePath.length,
-        sPtr,
-        sigHex.length,
-        kPtr,
-        pubKeyPEM.length,
-        resultPtr,
-      );
-
-      return ok != 0;
-    });
-  }
-
-  /// Server Management
-  bool startServer(ServerType type, {String port = '', String rootDir = '', String friendlyName = ''}) {
-    if (_engineHandle == 0) throw StateError('Engine not initialized');
-    return using((Arena arena) {
-      final pPtr = port.toNativeBytes(arena);
-      final rPtr = rootDir.toNativeBytes(arena);
-      final fPtr = friendlyName.toNativeBytes(arena);
-      final resultPtr = arena<FreeboxResultC>();
-
-      int ok = 0;
-      switch (type) {
-        case ServerType.api:
-          ok = _bindings.startAPIServer(_engineHandle, pPtr, port.length, resultPtr);
-          break;
-        case ServerType.http:
-          ok = _bindings.startHTTPServer(_engineHandle, pPtr, port.length, rPtr, rootDir.length, resultPtr);
-          break;
-        case ServerType.ftp:
-          ok = _bindings.startFTPServer(_engineHandle, pPtr, port.length, rPtr, rootDir.length, resultPtr);
-          break;
-        case ServerType.dlna:
-          ok = _bindings.startDLNAServer(_engineHandle, fPtr, friendlyName.length, pPtr, port.length, rPtr, rootDir.length, resultPtr);
-          break;
-        default:
-          ok = _bindings.startHTTPServer(_engineHandle, pPtr, port.length, rPtr, rootDir.length, resultPtr);
-          break;
-      }
-      return ok != 0;
-    });
-  }
-
-  bool stopServer(ServerType type) {
-    if (_engineHandle == 0) return false;
-    switch (type) {
-      case ServerType.api:
-        return _bindings.stopAPIServer(_engineHandle) != 0;
-      case ServerType.http:
-        return _bindings.stopHTTPServer(_engineHandle) != 0;
-      case ServerType.ftp:
-        return _bindings.stopFTPServer(_engineHandle) != 0;
-      case ServerType.dlna:
-        return _bindings.stopDLNAServer(_engineHandle) != 0;
-      default:
-        return false;
-    }
-  }
-
-  /// Task Control
-  bool pauseTask(int taskId) {
-    if (_engineHandle == 0) return false;
-    return _bindings.pauseTask(_engineHandle, taskId) != 0;
-  }
-
-  bool resumeTask(int taskId) {
-    if (_engineHandle == 0) return false;
-    return _bindings.resumeTask(_engineHandle, taskId) != 0;
-  }
-
-  bool cancelTask(int taskId) {
-    if (_engineHandle == 0) return false;
-    return _bindings.cancelTask(_engineHandle, taskId) != 0;
-  }
-
-  /// Closes the Freebox engine and releases CGO resources.
-  void close() {
-    if (_engineHandle != 0) {
-      _bindings.closeEngine(_engineHandle);
-      _engineHandle = 0;
-    }
-    _asyncBridge.dispose();
-  }
+  Future<void> startAPIServer({String port = ':8080'}) async => _ipc.call('servers.startAPI', {'port': port});
+  Future<void> stopAPIServer() async => _ipc.call('servers.stopAPI');
+  Future<void> startHTTPServer({String port = ':8081', String rootDir = ''}) async =>
+      _ipc.call('servers.startHTTP', {'port': port, 'rootDir': rootDir});
+  Future<void> stopHTTPServer() async => _ipc.call('servers.stopHTTP');
+  Future<void> startFTPServer({String port = ':2121', String rootDir = ''}) async =>
+      _ipc.call('servers.startFTP', {'port': port, 'rootDir': rootDir});
+  Future<void> stopFTPServer() async => _ipc.call('servers.stopFTP');
+  Future<void> startDLNAServer({String friendlyName = '', String port = ':8200', String rootDir = ''}) async =>
+      _ipc.call('servers.startDLNA', {'friendlyName': friendlyName, 'port': port, 'rootDir': rootDir});
+  Future<void> stopDLNAServer() async => _ipc.call('servers.stopDLNA');
 }
