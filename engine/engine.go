@@ -185,14 +185,10 @@ func (e *Engine) Execute(ctx context.Context, task *Task) (*TaskHandle, error) {
 }
 
 func (e *Engine) saveTaskToDB(h *TaskHandle) {
-	if e.db == nil || h == nil {
 	if h == nil {
 		return
 	}
 	rec := h.ToRecord()
-	data, err := json.Marshal(rec)
-	if err == nil {
-		_ = e.db.PutEncrypted(storage.BucketTasks, rec.ID, data)
 	if e.db != nil {
 		data, err := json.Marshal(rec)
 		if err == nil {

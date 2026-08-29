@@ -8,7 +8,6 @@ require (
 	github.com/gotd/contrib v0.25.0
 	github.com/gotd/log/logzap v0.1.1
 	github.com/gotd/td v0.161.0
-	github.com/joho/godotenv v1.5.1
 	github.com/nwaples/rardecode v1.1.3
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0

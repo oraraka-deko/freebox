@@ -377,20 +377,16 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 				return fmt.Errorf("failed opening entry %s: %w", f.Name, err)
 			}
 
-			entryData, err := io.ReadAll(rc)
-			rc.Close()
-			// Stream entry directly into destination file
 			dstWriter, err := fsys.Create(destPath)
 			if err != nil {
-				return fmt.Errorf("failed reading entry %s: %w", f.Name, err)
-				rc.Close()
+				_ = rc.Close()
 				return fmt.Errorf("failed creating %s: %w", destPath, err)
 			}
 
 			var srcStream io.Reader = rc
 			if opts.Password != "" && (f.Flags&0x1) != 0 {
 				entryData, rErr := io.ReadAll(rc)
-				rc.Close()
+				_ = rc.Close()
 				if rErr != nil {
 					_ = dstWriter.Close()
 					return fmt.Errorf("failed reading encrypted entry %s: %w", f.Name, rErr)
@@ -399,13 +395,9 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 				srcStream = bytes.NewReader(entryData)
 			}
 
-			if err := fsys.Write(destPath, entryData); err != nil {
-				return fmt.Errorf("failed writing %s: %w", destPath, err)
 			_, copyErr := io.CopyBuffer(dstWriter, srcStream, buf)
 			_ = dstWriter.Close()
-			if opts.Password == "" || (f.Flags&0x1) == 0 {
-				_ = rc.Close()
-			}
+			_ = rc.Close()
 			if copyErr != nil {
 				return fmt.Errorf("failed writing %s: %w", destPath, copyErr)
 			}
@@ -571,15 +563,11 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 				continue
 			}
 
-			entryData, err := io.ReadAll(tr)
 			dstWriter, err := fsys.Create(destPath)
 			if err != nil {
-				return fmt.Errorf("failed reading tar entry %s: %w", hdr.Name, err)
 				return fmt.Errorf("failed creating %s: %w", destPath, err)
 			}
 
-			if err := fsys.Write(destPath, entryData); err != nil {
-				return fmt.Errorf("failed writing %s: %w", destPath, err)
 			_, copyErr := io.CopyBuffer(dstWriter, tr, buf)
 			_ = dstWriter.Close()
 			if copyErr != nil {
@@ -593,7 +581,6 @@ func Extract(fsys vfs.FileSystem, archivePath, targetDir string, opts ExtractOpt
 	}
 }
 
-// Create builds a new archive from files and directories.
 // Create builds a new archive from files and directories using streaming I/O.
 func Create(fsys vfs.FileSystem, archivePath string, sourcePaths []string, opts CreateOptions) error {
 	archivePath = vfs.NormalizePath(archivePath)
@@ -601,7 +588,6 @@ func Create(fsys vfs.FileSystem, archivePath string, sourcePaths []string, opts 
 		opts.Type = DetectType(archivePath)
 	}
 
-	var buf bytes.Buffer
 	_ = fsys.MkdirAll(path.Dir(archivePath))
 	dstWriter, err := fsys.Create(archivePath)
 	if err != nil {
@@ -614,10 +600,11 @@ func Create(fsys vfs.FileSystem, archivePath string, sourcePaths []string, opts 
 
 	switch opts.Type {
 	case TypeZip:
-		zw := zip.NewWriter(&buf)
 		zw := zip.NewWriter(dstWriter)
 		if opts.Comment != "" {
-			_ = zw.SetComment(opts.Comment)
+			if err := zw.SetComment(opts.Comment); err != nil {
+				return err
+			}
 		}
 
 		for _, src := range sourcePaths {
@@ -626,83 +613,37 @@ func Create(fsys vfs.FileSystem, archivePath string, sourcePaths []string, opts 
 			if err != nil {
 				return err
 			}
-
 			if !info.IsDir {
-				data, err := fsys.Read(src)
-				if err != nil {
 				if err := addFileToZip(fsys, zw, src, path.Base(src), info.ModTime, opts.Password, buf); err != nil {
 					return err
 				}
-				if opts.Password != "" {
-					data = encryptZipCrypto(data, opts.Password)
-				}
-				fh := &zip.FileHeader{
-					Name:     path.Base(src),
-					Modified: info.ModTime,
-					Method:   zip.Deflate,
-				}
-				if opts.Password != "" {
-					fh.Flags |= 0x1 // Set encrypted bit
-				}
-				w, err := zw.CreateHeader(fh)
-				if err != nil {
-					return err
-				}
-				if _, err := w.Write(data); err != nil {
-					return err
-				}
-			} else {
-				// Walk directory tree
-				prefix := src
-				_ = fsys.Walk(src, func(p string, fi *vfs.FileInfo, err error) error {
-					if err != nil || fi.IsDir {
-						return nil
-					}
-					rel := strings.TrimPrefix(p, prefix)
-					rel = strings.TrimPrefix(rel, "/")
-					data, err := fsys.Read(p)
-					if err != nil {
-						return err
-					}
-					if opts.Password != "" {
-						data = encryptZipCrypto(data, opts.Password)
-					}
-					fh := &zip.FileHeader{
-						Name:     rel,
-						Modified: fi.ModTime,
-						Method:   zip.Deflate,
-					}
-					if opts.Password != "" {
-						fh.Flags |= 0x1
-					}
-					w, err := zw.CreateHeader(fh)
-					if err != nil {
-						return err
-					}
-					_, err = w.Write(data)
-					return err
-					return addFileToZip(fsys, zw, p, rel, fi.ModTime, opts.Password, buf)
-				})
+				continue
 			}
-		}
 
-		if err := zw.Close(); err != nil {
-			return err
+			prefix := src
+			if err := fsys.Walk(src, func(p string, fi *vfs.FileInfo, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if fi.IsDir {
+					return nil
+				}
+				rel := strings.TrimPrefix(strings.TrimPrefix(p, prefix), "/")
+				return addFileToZip(fsys, zw, p, rel, fi.ModTime, opts.Password, buf)
+			}); err != nil {
+				return err
+			}
 		}
 		return zw.Close()
 
 	case TypeTar, TypeTarGz:
-		var tw *tar.Writer
+		var output io.Writer = dstWriter
 		var gw *gzip.Writer
-
 		if opts.Type == TypeTarGz {
-			gw = gzip.NewWriter(&buf)
 			gw = gzip.NewWriter(dstWriter)
-			tw = tar.NewWriter(gw)
-		} else {
-			tw = tar.NewWriter(&buf)
-			tw = tar.NewWriter(dstWriter)
+			output = gw
 		}
+		tw := tar.NewWriter(output)
 
 		for _, src := range sourcePaths {
 			src = vfs.NormalizePath(src)
@@ -710,58 +651,33 @@ func Create(fsys vfs.FileSystem, archivePath string, sourcePaths []string, opts 
 			if err != nil {
 				return err
 			}
-
 			if !info.IsDir {
-				data, err := fsys.Read(src)
-				if err != nil {
 				if err := addFileToTar(fsys, tw, src, path.Base(src), info, buf); err != nil {
 					return err
 				}
-				hdr := &tar.Header{
-					Name:     path.Base(src),
-					Mode:     0644,
-					Size:     int64(len(data)),
-					ModTime:  info.ModTime,
-					Typeflag: tar.TypeReg,
+				continue
+			}
+
+			prefix := src
+			if err := fsys.Walk(src, func(p string, fi *vfs.FileInfo, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
 				}
-				if err := tw.WriteHeader(hdr); err != nil {
-					return err
+				if fi.IsDir {
+					return nil
 				}
-				if _, err := tw.Write(data); err != nil {
-					return err
-				}
-			} else {
-				prefix := src
-				_ = fsys.Walk(src, func(p string, fi *vfs.FileInfo, err error) error {
-					if err != nil || fi.IsDir {
-						return nil
-					}
-					rel := strings.TrimPrefix(p, prefix)
-					rel = strings.TrimPrefix(rel, "/")
-					data, err := fsys.Read(p)
-					if err != nil {
-						return err
-					}
-					hdr := &tar.Header{
-						Name:     rel,
-						Mode:     0644,
-						Size:     int64(len(data)),
-						ModTime:  fi.ModTime,
-						Typeflag: tar.TypeReg,
-					}
-					if err := tw.WriteHeader(hdr); err != nil {
-						return err
-					}
-					_, err = tw.Write(data)
-					return err
-					return addFileToTar(fsys, tw, p, rel, fi, buf)
-				})
+				rel := strings.TrimPrefix(strings.TrimPrefix(p, prefix), "/")
+				return addFileToTar(fsys, tw, p, rel, fi, buf)
+			}); err != nil {
+				return err
 			}
 		}
 
-		_ = tw.Close()
+		if err := tw.Close(); err != nil {
+			return err
+		}
 		if gw != nil {
-			_ = gw.Close()
+			return gw.Close()
 		}
 		return nil
 
@@ -769,9 +685,6 @@ func Create(fsys vfs.FileSystem, archivePath string, sourcePaths []string, opts 
 		return fmt.Errorf("unsupported creation type: %s", opts.Type)
 	}
 }
-
-	_ = fsys.MkdirAll(path.Dir(archivePath))
-	return fsys.Write(archivePath, buf.Bytes())
 func addFileToZip(fsys vfs.FileSystem, zw *zip.Writer, srcPath, entryName string, modTime time.Time, password string, buf []byte) error {
 	rc, err := fsys.Open(srcPath)
 	if err != nil {
@@ -880,38 +793,29 @@ func CreateMultiPart(fsys vfs.FileSystem, baseArchivePath string, sourcePaths []
 	}
 	defer func() { _ = fsys.Remove(tempArchive) }()
 
-	data, err := fsys.Read(tempArchive)
 	stat, err := fsys.Stat(tempArchive)
 	if err != nil {
 		return nil, err
 	}
 
-	totalLen := int64(len(data))
 	srcFile, err := fsys.Open(tempArchive)
 	if err != nil {
 		return nil, err
 	}
 	defer srcFile.Close()
 
-	totalLen := stat.Size
 	var parts []string
 	partIndex := 1
-
-	for offset := int64(0); offset < totalLen; offset += partSizeBytes {
-		end := offset + partSizeBytes
-		if end > totalLen {
-			end = totalLen
 	buf := bufferpool.Acquire(64 * 1024)
 	defer bufferpool.Release(buf)
 
-	for offset := int64(0); offset < totalLen; {
+	for offset := int64(0); offset < stat.Size; {
 		remainingInPart := partSizeBytes
-		if offset+remainingInPart > totalLen {
-			remainingInPart = totalLen - offset
+		if offset+remainingInPart > stat.Size {
+			remainingInPart = stat.Size - offset
 		}
 
 		partName := fmt.Sprintf("%s.%03d", baseArchivePath, partIndex)
-		if err := fsys.Write(partName, data[offset:end]); err != nil {
 		partWriter, err := fsys.Create(partName)
 		if err != nil {
 			return nil, err
@@ -921,6 +825,9 @@ func CreateMultiPart(fsys vfs.FileSystem, baseArchivePath string, sourcePaths []
 		_ = partWriter.Close()
 		if copyErr != nil {
 			return nil, copyErr
+		}
+		if written == 0 {
+			return nil, io.ErrNoProgress
 		}
 
 		parts = append(parts, partName)
@@ -937,7 +844,6 @@ func ExtractMultiPart(fsys vfs.FileSystem, partPaths []string, targetDir string,
 		return errors.New("no archive parts provided")
 	}
 
-	var combined bytes.Buffer
 	tempCombinedPath := "/tmp_combined_" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".zip"
 	combinedWriter, err := fsys.Create(tempCombinedPath)
 	if err != nil {
@@ -948,14 +854,12 @@ func ExtractMultiPart(fsys vfs.FileSystem, partPaths []string, targetDir string,
 	defer bufferpool.Release(buf)
 
 	for _, p := range partPaths {
-		data, err := fsys.Read(p)
 		rc, err := fsys.Open(p)
 		if err != nil {
 			_ = combinedWriter.Close()
 			_ = fsys.Remove(tempCombinedPath)
 			return fmt.Errorf("failed reading part %s: %w", p, err)
 		}
-		combined.Write(data)
 		_, cErr := io.CopyBuffer(combinedWriter, rc, buf)
 		_ = rc.Close()
 		if cErr != nil {
@@ -965,10 +869,6 @@ func ExtractMultiPart(fsys vfs.FileSystem, partPaths []string, targetDir string,
 		}
 	}
 
-	tempCombinedPath := "/tmp_combined_" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".zip"
-	if err := fsys.Write(tempCombinedPath, combined.Bytes()); err != nil {
-		return err
-	}
 	_ = combinedWriter.Close()
 	defer func() { _ = fsys.Remove(tempCombinedPath) }()
 
