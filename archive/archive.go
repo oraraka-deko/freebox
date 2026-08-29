@@ -827,7 +827,7 @@ func CreateMultiPart(fsys vfs.FileSystem, baseArchivePath string, sourcePaths []
 			return nil, copyErr
 		}
 		if written == 0 {
-			return nil, io.ErrNoProgress
+			return nil, errors.New("archive part writer made no progress")
 		}
 
 		parts = append(parts, partName)
