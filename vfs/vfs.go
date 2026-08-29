@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -35,6 +36,9 @@ type FileInfo struct {
 
 // FileSystem defines the standard interface for virtual file systems.
 type FileSystem interface {
+	// OpenFile provides the capability-aware file contract for all new code.
+	// Legacy convenience methods below remain temporarily while callers migrate.
+	OpenFileSystem
 	// Open opens the named file for reading.
 	Open(p string) (io.ReadCloser, error)
 	// Create creates or truncates the named file for writing.
@@ -107,6 +111,52 @@ func (m *MemFS) Open(p string) (io.ReadCloser, error) {
 		return nil, ErrIsADirectory
 	}
 	return io.NopCloser(bytes.NewReader(node.data)), nil
+}
+
+// Capabilities reports that memory files support native random access and mutation.
+func (m *MemFS) Capabilities() Capabilities {
+	return Capabilities(CapStreamRead | CapRangeRead | CapSeek | CapStreamWrite | CapRandomWrite | CapTruncate | CapAtomicRename | CapResumableRead | CapResumableWrite)
+}
+
+// OpenFile opens a context-aware memory file handle without buffering the whole
+// object for partial writes.
+func (m *MemFS) OpenFile(ctx context.Context, p string, options OpenOptions) (File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p = NormalizePath(p)
+	if !options.Read && !options.Write {
+		return nil, errors.New("open requires read or write access")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	node, exists := m.nodes[p]
+	if options.Exclusive && options.Create && exists {
+		return nil, ErrAlreadyExists
+	}
+	if !exists {
+		if !options.Create {
+			return nil, ErrNotFound
+		}
+		if err := m.mkdirAllInternal(path.Dir(p)); err != nil {
+			return nil, err
+		}
+		node = &memNode{modTime: time.Now()}
+		m.nodes[p] = node
+	}
+	if node.isDir {
+		return nil, ErrIsADirectory
+	}
+	if options.Truncate {
+		node.data = nil
+		node.modTime = time.Now()
+	}
+	file := &memFile{fs: m, path: p, readable: options.Read, writable: options.Write}
+	if options.Append {
+		file.offset = int64(len(node.data))
+	}
+	return file, nil
 }
 
 type memWriteCloser struct {
@@ -393,6 +443,48 @@ func (o *OSFS) resolve(p string) string {
 
 func (o *OSFS) Open(p string) (io.ReadCloser, error) {
 	return os.Open(o.resolve(p))
+}
+
+// Capabilities reports native local filesystem support.
+func (o *OSFS) Capabilities() Capabilities {
+	return Capabilities(CapStreamRead | CapRangeRead | CapSeek | CapStreamWrite | CapRandomWrite | CapTruncate | CapAtomicRename | CapResumableRead | CapResumableWrite)
+}
+
+// OpenFile opens a native OS handle with the requested semantics.
+func (o *OSFS) OpenFile(ctx context.Context, p string, options OpenOptions) (File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !options.Read && !options.Write {
+		return nil, errors.New("open requires read or write access")
+	}
+	flags := 0
+	switch {
+	case options.Read && options.Write:
+		flags = os.O_RDWR
+	case options.Write:
+		flags = os.O_WRONLY
+	default:
+		flags = os.O_RDONLY
+	}
+	if options.Create {
+		flags |= os.O_CREATE
+	}
+	if options.Truncate {
+		flags |= os.O_TRUNC
+	}
+	if options.Append {
+		flags |= os.O_APPEND
+	}
+	if options.Exclusive {
+		flags |= os.O_EXCL
+	}
+	if options.Create {
+		if err := os.MkdirAll(filepath.Dir(o.resolve(p)), 0755); err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenFile(o.resolve(p), flags, 0644)
 }
 
 func (o *OSFS) Create(p string) (io.WriteCloser, error) {

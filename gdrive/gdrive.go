@@ -110,6 +110,33 @@ func (g *GDriveFS) resolvePath(p string) (string, error) {
 	return currentParentID, nil
 }
 
+// Capabilities reports supported operations for GDrive.
+func (g *GDriveFS) Capabilities() vfs.Capabilities {
+	return vfs.Capabilities(vfs.CapStreamRead | vfs.CapStreamWrite | vfs.CapAtomicRename)
+}
+
+// OpenFile opens a file for reading or writing.
+func (g *GDriveFS) OpenFile(ctx context.Context, p string, options vfs.OpenOptions) (vfs.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if options.Write {
+		return nil, vfs.ErrUnsupported
+	}
+	if !options.Read {
+		return nil, errors.New("open requires read access")
+	}
+	fileID, err := g.resolvePath(p)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := g.srv.Files.Get(fileID).Context(ctx).Download()
+	if err != nil {
+		return nil, fmt.Errorf("download error for %s: %w", p, err)
+	}
+	return resp.Body, nil
+}
+
 // Open opens the named file for reading.
 func (g *GDriveFS) Open(p string) (io.ReadCloser, error) {
 	fileID, err := g.resolvePath(p)

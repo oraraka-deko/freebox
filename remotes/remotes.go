@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -316,6 +319,73 @@ func (m *Manager) MountRemote(name string) error {
 	return m.mountInternal(*cfg)
 }
 
+// ParseRemoteURI parses a remote storage URI (e.g. ftp:127.0.0.1:2121/path/we/want or sftp://user:pass@host:22/var/data)
+// and returns a populated RemoteConfig.
+func ParseRemoteURI(rawURI string) (*RemoteConfig, error) {
+	rawURI = strings.TrimSpace(rawURI)
+	if rawURI == "" {
+		return nil, errors.New("empty URI")
+	}
+
+	// Normalise "proto:host/path" to "proto://host/path" if necessary
+	colonIdx := strings.Index(rawURI, ":")
+	if colonIdx == -1 {
+		return nil, errors.New("invalid URI format: missing scheme")
+	}
+
+	scheme := strings.ToLower(rawURI[:colonIdx])
+	rest := rawURI[colonIdx+1:]
+	if !strings.HasPrefix(rest, "//") {
+		rest = "//" + rest
+	}
+	normalizedURL := scheme + ":" + rest
+
+	u, err := url.Parse(normalizedURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing URI: %w", err)
+	}
+
+	cfg := &RemoteConfig{
+		Type:      RemoteType(scheme),
+		Host:      u.Hostname(),
+		Path:      u.Path,
+		URL:       rawURI,
+		Options:   make(map[string]string),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	if u.Port() != "" {
+		if p, err := strconv.Atoi(u.Port()); err == nil {
+			cfg.Port = p
+		}
+	}
+
+	if u.User != nil {
+		cfg.Username = u.User.Username()
+		if pass, ok := u.User.Password(); ok {
+			cfg.Password = pass
+		}
+	}
+
+	// Clean path
+	if cfg.Path != "" {
+		cfg.Path = vfs.NormalizePath(cfg.Path)
+	}
+
+	// Generate default name if empty
+	hostPart := cfg.Host
+	if hostPart == "" {
+		hostPart = "remote"
+	}
+	cfg.Name = fmt.Sprintf("%s-%s", scheme, hostPart)
+	if cfg.Port > 0 {
+		cfg.Name = fmt.Sprintf("%s-%d", cfg.Name, cfg.Port)
+	}
+
+	return cfg, nil
+}
+
 func (m *Manager) mountInternal(cfg RemoteConfig) error {
 	if m.registry == nil {
 		return errors.New("VFS registry not initialized")
@@ -354,6 +424,12 @@ func (m *Manager) mountInternal(cfg RemoteConfig) error {
 		fsys = vfs.NewMemFS()
 	}
 
+	// If a custom root path is provided (e.g. /path/we/want) and not TypeLocal (which already roots at cfg.Path),
+	// wrap with SubFS so /path/we/want acts as the virtual root /
+	if cfg.Path != "" && cfg.Path != "/" && cfg.Type != TypeLocal && cfg.Type != TypeGDrive && cfg.Type != TypeGoogleDrive {
+		fsys = vfs.NewSubFS(fsys, cfg.Path)
+	}
+
 	return m.registry.RegisterCustom(cfg.Name, fsys, vfs.MountInfo{
 		Name:      cfg.Name,
 		Type:      string(cfg.Type),
@@ -374,3 +450,4 @@ func (m *Manager) mountInternal(cfg RemoteConfig) error {
 		},
 	})
 }
+

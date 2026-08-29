@@ -37,6 +37,28 @@ func (a *WebDAVAdapter) Open(p string) (io.ReadCloser, error) {
 	return a.client.Get(ctx, NormalizePath(p))
 }
 
+// Capabilities reports only operations WebDAV can currently perform without
+// emulation. Range-read support is added only after a server validates 206
+// responses; a plain WebDAV GET is a streaming reader.
+func (a *WebDAVAdapter) Capabilities() Capabilities {
+	return Capabilities(CapStreamRead | CapStreamWrite | CapAtomicRename)
+}
+
+// OpenFile is the context-aware streaming entry point. Random access is not
+// exposed until the server has demonstrated RFC 7233 range support.
+func (a *WebDAVAdapter) OpenFile(ctx context.Context, p string, options OpenOptions) (File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if options.Write {
+		return nil, ErrUnsupported
+	}
+	if !options.Read {
+		return nil, errors.New("open requires read access")
+	}
+	return a.client.Get(ctx, NormalizePath(p))
+}
+
 type webdavWriteCloser struct {
 	buf     *bytes.Buffer
 	path    string

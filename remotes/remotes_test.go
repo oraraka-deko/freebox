@@ -88,3 +88,24 @@ func TestRemotesManager(t *testing.T) {
 		t.Errorf("expected remote to be unmounted after deletion")
 	}
 }
+
+func TestParseRemoteURI(t *testing.T) {
+	// Test FTP custom path
+	cfg, err := ParseRemoteURI("ftp:127.0.0.1:2121/path/we/want")
+	if err != nil {
+		t.Fatalf("ParseRemoteURI failed: %v", err)
+	}
+	if cfg.Type != TypeFTP || cfg.Host != "127.0.0.1" || cfg.Port != 2121 || cfg.Path != "/path/we/want" {
+		t.Errorf("unexpected parsed config: %+v", cfg)
+	}
+
+	// Test SFTP with user and password
+	cfg2, err := ParseRemoteURI("sftp://admin:secret123@myhost.com:2222/var/www/html")
+	if err != nil {
+		t.Fatalf("ParseRemoteURI sftp failed: %v", err)
+	}
+	if cfg2.Type != TypeSFTP || cfg2.Username != "admin" || cfg2.Password != "secret123" || cfg2.Host != "myhost.com" || cfg2.Port != 2222 || cfg2.Path != "/var/www/html" {
+		t.Errorf("unexpected parsed config 2: %+v", cfg2)
+	}
+}
+

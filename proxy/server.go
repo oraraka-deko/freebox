@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"freebox/internal/bufferpool"
 )
 
 // StreamServer serves random-access StreamProxy files via HTTP with full Range seeking support.
@@ -114,7 +116,7 @@ func (s *StreamServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
-			_, _ = io.Copy(w, proxyStream)
+			_, _ = bufferpool.Copy(w, proxyStream)
 		}
 		return
 	}
@@ -140,7 +142,7 @@ func (s *StreamServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = io.CopyN(w, proxyStream, contentLength)
+	_, _ = bufferpool.CopyN(w, proxyStream, contentLength)
 }
 
 func parseRangeHeader(h string, totalSize int64) (start, end int64, err error) {

@@ -20,6 +20,10 @@ func archiveTypeFromCode(code C.FreeboxArchiveFormat) archive.ArchiveType {
 		return archive.TypeTarGz
 	case C.FREEBOX_ARCHIVE_TBZ2:
 		return archive.TypeTarBz
+	case C.FREEBOX_ARCHIVE_RAR:
+		return archive.TypeRar
+	case C.FREEBOX_ARCHIVE_7Z:
+		return archive.Type7z
 	default:
 		return archive.TypeZip
 	}

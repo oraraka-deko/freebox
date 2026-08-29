@@ -18,6 +18,7 @@ import (
 	fbHttp "freebox/http"
 	"freebox/local"
 	"freebox/proxy"
+	"freebox/remotes"
 	"freebox/smb"
 	"freebox/ssh"
 	"freebox/storage"
@@ -29,6 +30,10 @@ type Engine struct {
 	queue        *TaskQueue
 	tasks        map[string]*TaskHandle
 	db           *storage.DB
+	historyStore *storage.TaskHistoryStore
+	treeCache    *storage.TreeCache
+	mediaCache   *storage.MediaCache
+	editor       *remotes.EditorManager
 	streamServer *proxy.StreamServer
 	streamPort   string
 	servers      map[string]any
@@ -62,9 +67,14 @@ func NewEngine(cfg EngineConfig) *Engine {
 		cfg.StreamPort = ":8090"
 	}
 
+	mediaCache := storage.NewMediaCache(storage.MediaCacheConfig{DB: cfg.DB, MaxMemoryMB: 64})
 	e := &Engine{
 		tasks:        make(map[string]*TaskHandle),
 		db:           cfg.DB,
+		historyStore: storage.NewTaskHistoryStore(cfg.DB),
+		treeCache:    storage.NewTreeCache(15 * time.Minute),
+		mediaCache:   mediaCache,
+		editor:       remotes.NewEditorManager(mediaCache, ""),
 		servers:      make(map[string]any),
 		streamServer: proxy.NewStreamServer(),
 		streamPort:   cfg.StreamPort,
@@ -96,11 +106,42 @@ func (e *Engine) StreamServer() *proxy.StreamServer {
 	return e.streamServer
 }
 
+// History returns the task history store.
+func (e *Engine) History() *storage.TaskHistoryStore {
+	return e.historyStore
+}
+
+// TreeCache returns the directory tree index and tiny header cache.
+func (e *Engine) TreeCache() *storage.TreeCache {
+	return e.treeCache
+}
+
+// MediaCache returns the multi-tier media, thumbnail, proxy, and edit drafts cache.
+func (e *Engine) MediaCache() *storage.MediaCache {
+	return e.mediaCache
+}
+
+// Editor returns the remote file editor manager.
+func (e *Engine) Editor() *remotes.EditorManager {
+	return e.editor
+}
+
+// GetRecentTasks returns the last N executed actions from the history ledger.
+func (e *Engine) GetRecentTasks(n int) ([]storage.TaskHistoryRecord, error) {
+	if e.historyStore == nil {
+		return nil, nil
+	}
+	return e.historyStore.GetRecentTasks(n)
+}
+
 // SetDB sets or updates the backing storage DB.
 func (e *Engine) SetDB(db *storage.DB) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.db = db
+	e.historyStore = storage.NewTaskHistoryStore(db)
+	e.mediaCache = storage.NewMediaCache(storage.MediaCacheConfig{DB: db, MaxMemoryMB: 64})
+	e.editor = remotes.NewEditorManager(e.mediaCache, "")
 }
 
 // Submit enqueues a task for asynchronous execution in the worker queue.
@@ -145,12 +186,35 @@ func (e *Engine) Execute(ctx context.Context, task *Task) (*TaskHandle, error) {
 
 func (e *Engine) saveTaskToDB(h *TaskHandle) {
 	if e.db == nil || h == nil {
+	if h == nil {
 		return
 	}
 	rec := h.ToRecord()
 	data, err := json.Marshal(rec)
 	if err == nil {
 		_ = e.db.PutEncrypted(storage.BucketTasks, rec.ID, data)
+	if e.db != nil {
+		data, err := json.Marshal(rec)
+		if err == nil {
+			_ = e.db.PutEncrypted(storage.BucketTasks, rec.ID, data)
+		}
+	}
+	if e.historyStore != nil && (h.Status() == StatusCompleted || h.Status() == StatusFailed || h.Status() == StatusCanceled) {
+		_ = e.historyStore.AppendTask(storage.TaskHistoryRecord{
+			ID:             rec.ID,
+			Type:           string(rec.Type),
+			Description:    rec.Description,
+			Status:         string(rec.Status),
+			SrcPath:        rec.SrcPath,
+			DstPath:        rec.DstPath,
+			BytesProcessed: rec.BytesProcessed,
+			TotalBytes:     rec.TotalBytes,
+			Error:          rec.Error,
+			StartedAt:      rec.StartTime,
+			EndedAt:        rec.EndTime,
+			DurationMs:     rec.Duration.Milliseconds(),
+			Metadata:       rec.Metadata,
+		})
 	}
 }
 

@@ -57,6 +57,8 @@ typedef uint8_t FreeboxArchiveFormat;
 #define FREEBOX_ARCHIVE_TAR    2
 #define FREEBOX_ARCHIVE_TGZ    3
 #define FREEBOX_ARCHIVE_TBZ2   4
+#define FREEBOX_ARCHIVE_RAR    5
+#define FREEBOX_ARCHIVE_7Z     6
 
 // Dedup Method codes
 typedef uint8_t FreeboxDedupMethod;

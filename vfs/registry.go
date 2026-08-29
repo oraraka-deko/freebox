@@ -105,12 +105,25 @@ func (r *Registry) Mount(name string, cfg MountConfig, persist bool) error {
 		fs = NewOSFS(cfg.Path)
 	case "mem", "memory":
 		fs = NewMemFS()
+		mem := NewMemFS()
+		if cfg.Path != "" && cfg.Path != "/" {
+			_ = mem.MkdirAll(cfg.Path)
+			fs = NewSubFS(mem, cfg.Path)
+		} else {
+			fs = mem
+		}
 	case "webdav":
 		if cfg.URL == "" {
 			return errors.New("webdav URL required")
 		}
 		client := fbHttp.NewWebDAVClient(cfg.URL, cfg.Username, cfg.Password, 30*time.Second)
 		fs = NewWebDAVAdapter(client)
+		adapter := NewWebDAVAdapter(client)
+		if cfg.Path != "" && cfg.Path != "/" {
+			fs = NewSubFS(adapter, cfg.Path)
+		} else {
+			fs = adapter
+		}
 	default:
 		return fmt.Errorf("unsupported mount type: %s", cfg.Type)
 	}

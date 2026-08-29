@@ -20,6 +20,7 @@ var (
 	ErrNotFound      = errors.New("key not found")
 	ErrBucketMissing = errors.New("bucket not found")
 	ErrDecryptFailed = errors.New("decryption failed")
+	ErrKeyExists     = errors.New("key already exists")
 )
 
 // Standard bucket names
@@ -34,6 +35,26 @@ var (
 	BucketThumbnails   = []byte("thumbnails")
 	BucketCertificates = []byte("certificates")
 	BucketTelegram     = []byte("telegram")
+	BucketTransfers    = []byte("transfers")
+	BucketTransferLog  = []byte("transfer_log")
+	BucketUsers            = []byte("users")
+	BucketSessions         = []byte("sessions")
+	BucketMounts           = []byte("mounts")
+	BucketSettings         = []byte("settings")
+	BucketTasks            = []byte("tasks")
+	BucketRemotes          = []byte("remotes")
+	BucketMeta             = []byte("meta")
+	BucketThumbnails       = []byte("thumbnails")
+	BucketCertificates     = []byte("certificates")
+	BucketTelegram         = []byte("telegram")
+	BucketTransfers        = []byte("transfers")
+	BucketTransferLog      = []byte("transfer_log")
+	BucketHistory          = []byte("history")
+	BucketClipboardHistory = []byte("clipboard_history")
+	BucketVFSTree          = []byte("vfs_tree")
+	BucketVFSHeaders       = []byte("vfs_headers")
+	BucketMediaCache       = []byte("media_cache")
+	BucketEditDrafts       = []byte("edit_drafts")
 )
 
 // DB manages an encrypted BBolt embedded database.
@@ -80,6 +101,14 @@ func Open(cfg Config) (*DB, error) {
 			BucketThumbnails,
 			BucketCertificates,
 			BucketTelegram,
+			BucketTransfers,
+			BucketTransferLog,
+			BucketHistory,
+			BucketClipboardHistory,
+			BucketVFSTree,
+			BucketVFSHeaders,
+			BucketMediaCache,
+			BucketEditDrafts,
 		}
 		for _, b := range buckets {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
@@ -227,6 +256,31 @@ func (d *DB) PutEncrypted(bucket []byte, key string, plaintext []byte) error {
 		return fmt.Errorf("encryption error: %w", err)
 	}
 	return d.Put(bucket, key, cipherData)
+}
+
+// PutEncryptedIfAbsent inserts an encrypted record exactly once. It is used by
+// append-only journals, where changing a completed event would hide recovery
+// history. The caller supplies a monotonic, unique key.
+func (d *DB) PutEncryptedIfAbsent(bucket []byte, key string, plaintext []byte) error {
+	cipherData, err := d.Encrypt(plaintext)
+	if err != nil {
+		return fmt.Errorf("encryption error: %w", err)
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.closed {
+		return errors.New("db is closed")
+	}
+	return d.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucket)
+		if b == nil {
+			return ErrBucketMissing
+		}
+		if b.Get([]byte(key)) != nil {
+			return ErrKeyExists
+		}
+		return b.Put([]byte(key), cipherData)
+	})
 }
 
 // GetDecrypted reads and decrypts ciphertext from bucket.

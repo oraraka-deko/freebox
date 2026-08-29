@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -73,3 +74,38 @@ func TestResumableTransfer(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkDisconnectAutoResume(t *testing.T) {
+	srcFS := vfs.NewMemFS()
+	dstFS := vfs.NewMemFS()
+
+	data := []byte("resilience test data over network")
+	_ = srcFS.Write("/src/data.txt", data)
+
+	xfer := NewResumableTransfer("xfer-resilience", srcFS, "/src/data.txt", dstFS, "/dst/data.txt", 16)
+
+	// Simulate pause with network disconnect reason
+	xfer.PauseWithReason("network_disconnect", "connection reset by peer")
+
+	cp := xfer.Checkpoint()
+	if cp.State != StatePaused || cp.Error != "network_disconnect: connection reset by peer" {
+		t.Fatalf("unexpected paused checkpoint: %+v", cp)
+	}
+
+	// Test AutoResume trigger
+	online := false
+	xfer.AutoResume(context.Background(), 20*time.Millisecond, func() bool {
+		return online
+	})
+
+	// Set online to true
+	time.Sleep(30 * time.Millisecond)
+	online = true
+	time.Sleep(50 * time.Millisecond)
+
+	cpAfter := xfer.Checkpoint()
+	if cpAfter.State != StateRunning {
+		t.Errorf("expected state to resume to RUNNING, got: %s", cpAfter.State)
+	}
+}
+
