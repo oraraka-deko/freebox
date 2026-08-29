@@ -3,11 +3,13 @@ module freebox
 go 1.26.5
 
 require (
+	github.com/bodgit/sevenzip v1.6.5
 	github.com/gorilla/websocket v1.5.3
 	github.com/gotd/contrib v0.25.0
 	github.com/gotd/log/logzap v0.1.1
 	github.com/gotd/td v0.161.0
 	github.com/joho/godotenv v1.5.1
+	github.com/nwaples/rardecode v1.1.3
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.55.0
@@ -25,7 +27,6 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
-	github.com/bodgit/sevenzip v1.6.5 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -51,7 +52,6 @@ require (
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
-	github.com/nwaples/rardecode v1.1.3 // indirect
 	github.com/ogen-go/ogen v1.23.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
@@ -81,5 +81,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
-
-replace github.com/gotd/td => ../td
