@@ -24,5 +24,3 @@ func errTaskNotFound(id string) error {
 }
 
 var errStreamServerNotInitialized = fmt.Errorf("stream server not initialized")
-
-var errTelegramNotInitialized = fmt.Errorf("telegram manager not initialized")

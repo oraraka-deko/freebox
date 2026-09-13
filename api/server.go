@@ -16,7 +16,6 @@ import (
 	"freebox/proxy"
 	"freebox/remotes"
 	"freebox/storage"
-	"freebox/telegram"
 	"freebox/thumbnail"
 	"freebox/vfs"
 	"freebox/web"
@@ -34,7 +33,6 @@ type ServerConfig struct {
 	RemotesMgr *remotes.Manager
 	ThumbMgr    *thumbnail.Engine
 	CertMgr     *cert.Manager
-	TelegramMgr *telegram.Manager
 }
 
 // Server handles all REST API and WebSocket communication for Freebox.
@@ -49,7 +47,6 @@ type Server struct {
 	remotesMgr  *remotes.Manager
 	thumbMgr    *thumbnail.Engine
 	certMgr     *cert.Manager
-	telegramMgr *telegram.Manager
 	wsHub       *ws.Hub
 	httpServer  *http.Server
 }
@@ -67,7 +64,6 @@ func NewServer(cfg ServerConfig) *Server {
 		remotesMgr:  cfg.RemotesMgr,
 		thumbMgr:    cfg.ThumbMgr,
 		certMgr:     cfg.CertMgr,
-		telegramMgr: cfg.TelegramMgr,
 	}
 
 	if s.mounts == nil {
@@ -87,9 +83,6 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 	if s.certMgr == nil {
 		s.certMgr = cert.NewManager(cfg.StorageDB)
-	}
-	if s.telegramMgr == nil && s.storageDB != nil {
-		s.telegramMgr, _ = telegram.NewManager(s.storageDB, telegram.AuthConfig{})
 	}
 
 	// Initialize WebSocket Hub
@@ -126,18 +119,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/remotes", s.requireAuth(s.handleRemotes))
 	mux.HandleFunc("/api/remotes/test", s.requireAuth(s.handleRemoteTest))
 	mux.HandleFunc("/api/remotes/", s.requireAuth(s.handleRemoteByName))
-
-	// Telegram Multi-Account & Auth
-	// mux.HandleFunc("/api/telegram/accounts", s.requireAuth(s.handleTelegramAccounts))
-	// mux.HandleFunc("/api/telegram/accounts/", s.requireAuth(s.handleTelegramAccountByID))
-	// mux.HandleFunc("/api/telegram/auth/start", s.requireAuth(s.handleTelegramAuthStart))
-	// mux.HandleFunc("/api/telegram/auth/code", s.requireAuth(s.handleTelegramAuthCode))
-	// mux.HandleFunc("/api/telegram/auth/password", s.requireAuth(s.handleTelegramAuthPassword))
-	// mux.HandleFunc("/api/telegram/auth/status", s.requireAuth(s.handleTelegramAuthStatus))
-	// mux.HandleFunc("/api/telegram/messages/send", s.requireAuth(s.handleTelegramSendMessage))
-	// mux.HandleFunc("/api/telegram/upload/url", s.requireAuth(s.handleTelegramUploadURL))
-	// mux.HandleFunc("/api/telegram/upload/file", s.requireAuth(s.handleTelegramUploadFile))
-	// mux.HandleFunc("/api/telegram/media/download", s.requireAuth(s.handleTelegramDownloadMedia))
 
 	// Search & Replace
 	mux.HandleFunc("/api/search", s.requireAuth(s.handleSearch))

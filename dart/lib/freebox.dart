@@ -282,12 +282,6 @@ class FreeboxClient {
     });
   }
 
-  // ---- Telegram ----
-
-  Future<List<dynamic>> telegramListSessions() async => await _ipc.call('telegram.listSessions') as List<dynamic>;
-
-  Future<void> telegramRemoveSession(int accountId) async => _ipc.call('telegram.removeSession', {'accountId': accountId});
-
   // ---- Servers ----
 
   Future<void> startAPIServer({String port = ':8080'}) async => _ipc.call('servers.startAPI', {'port': port});

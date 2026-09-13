@@ -34,7 +34,6 @@ var (
 	BucketMeta         = []byte("meta")
 	BucketThumbnails   = []byte("thumbnails")
 	BucketCertificates = []byte("certificates")
-	BucketTelegram     = []byte("telegram")
 	BucketTransfers    = []byte("transfers")
 	BucketTransferLog  = []byte("transfer_log")
 )
@@ -82,7 +81,6 @@ func Open(cfg Config) (*DB, error) {
 			BucketMeta,
 			BucketThumbnails,
 			BucketCertificates,
-			BucketTelegram,
 			BucketTransfers,
 			BucketTransferLog,
 		}

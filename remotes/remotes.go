@@ -38,7 +38,6 @@ const (
 	TypeS3          RemoteType = "s3"
 	TypeGDrive      RemoteType = "gdrive"
 	TypeGoogleDrive RemoteType = "googledrive"
-	TypeTelegram    RemoteType = "telegram"
 )
 
 // RemoteConfig contains configuration and credentials for a remote storage target.
