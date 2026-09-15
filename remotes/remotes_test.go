@@ -1,11 +1,16 @@
 package remotes
 
 import (
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"freebox/storage"
 	"freebox/vfs"
+
+	"github.com/johannesboyne/gofakes3"
+	"github.com/johannesboyne/gofakes3/backend/s3mem"
+	"golang.org/x/net/webdav"
 )
 
 func TestRemotesManager(t *testing.T) {
@@ -109,3 +114,99 @@ func TestParseRemoteURI(t *testing.T) {
 	}
 }
 
+func TestRemotesManagerWebDAVAndS3(t *testing.T) {
+	tempDir := t.TempDir()
+	db, err := storage.Open(storage.Config{
+		Path:       filepath.Join(tempDir, "test.db"),
+		Passphrase: "test-passphrase",
+	})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	registry := vfs.NewRegistry(db)
+	mgr := NewManager(db, registry)
+
+	// 1. WebDAV Remote
+	wdDir := t.TempDir()
+	wdHandler := &webdav.Handler{
+		Prefix:     "/",
+		FileSystem: webdav.Dir(wdDir),
+		LockSystem: webdav.NewMemLS(),
+	}
+	wdServer := httptest.NewServer(wdHandler)
+	defer wdServer.Close()
+
+	wdCfg := RemoteConfig{
+		Name:      "my-webdav",
+		Type:      TypeWebDAV,
+		URL:       wdServer.URL,
+		AutoMount: true,
+	}
+
+	ok, err := mgr.TestConnection(wdCfg)
+	if err != nil || !ok {
+		t.Fatalf("WebDAV TestConnection failed: ok=%v, err=%v", ok, err)
+	}
+
+	if err := mgr.Create(wdCfg); err != nil {
+		t.Fatalf("Create WebDAV remote failed: %v", err)
+	}
+
+	wdFS, exists := registry.Get("my-webdav")
+	if !exists {
+		t.Fatalf("expected my-webdav to be mounted in registry")
+	}
+	if err := wdFS.Write("/remotewd.txt", []byte("hello webdav remote")); err != nil {
+		t.Fatalf("Write to WebDAV remote failed: %v", err)
+	}
+	readWD, err := wdFS.Read("/remotewd.txt")
+	if err != nil || string(readWD) != "hello webdav remote" {
+		t.Fatalf("Read from WebDAV remote failed: %v", err)
+	}
+
+	// 2. S3 Remote
+	s3Backend := s3mem.New()
+	fakeS3 := gofakes3.New(s3Backend)
+	s3Server := httptest.NewServer(fakeS3.Server())
+	defer s3Server.Close()
+
+	if err := s3Backend.CreateBucket("remotes-bucket"); err != nil {
+		t.Fatalf("create bucket failed: %v", err)
+	}
+
+	s3Cfg := RemoteConfig{
+		Name:      "my-s3",
+		Type:      TypeS3,
+		Endpoint:  s3Server.URL,
+		Bucket:    "remotes-bucket",
+		Username:  "access-key",
+		Password:  "secret-key",
+		AutoMount: true,
+		Options: map[string]string{
+			"path_style": "true",
+		},
+	}
+
+	ok, err = mgr.TestConnection(s3Cfg)
+	if err != nil || !ok {
+		t.Fatalf("S3 TestConnection failed: ok=%v, err=%v", ok, err)
+	}
+
+	if err := mgr.Create(s3Cfg); err != nil {
+		t.Fatalf("Create S3 remote failed: %v", err)
+	}
+
+	s3FS, exists := registry.Get("my-s3")
+	if !exists {
+		t.Fatalf("expected my-s3 to be mounted in registry")
+	}
+	if err := s3FS.Write("/remotes3.txt", []byte("hello s3 remote")); err != nil {
+		t.Fatalf("Write to S3 remote failed: %v", err)
+	}
+	readS3, err := s3FS.Read("/remotes3.txt")
+	if err != nil || string(readS3) != "hello s3 remote" {
+		t.Fatalf("Read from S3 remote failed: %v", err)
+	}
+}

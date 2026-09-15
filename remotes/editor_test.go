@@ -108,4 +108,3 @@ func TestEditorConflictDetection(t *testing.T) {
 
 	_ = sess.Discard()
 }
-

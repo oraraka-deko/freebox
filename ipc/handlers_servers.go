@@ -40,16 +40,16 @@ func handleServersStartAPI(inst *Instance, conn *Conn, params json.RawMessage) (
 	}
 
 	srv := api.NewServer(api.ServerConfig{
-		Addr:        port,
-		AuthMgr:     inst.AuthMgr,
-		StorageDB:   inst.DB,
-		Mounts:      inst.Mounts,
-		Engine:      inst.Engine,
-		StreamServ:  inst.Engine.StreamServer(),
-		MetaMgr:     inst.MetaMgr,
-		RemotesMgr:  inst.RemotesMgr,
-		ThumbMgr:    inst.ThumbMgr,
-		CertMgr:     inst.CertMgr,
+		Addr:       port,
+		AuthMgr:    inst.AuthMgr,
+		StorageDB:  inst.DB,
+		Mounts:     inst.Mounts,
+		Engine:     inst.Engine,
+		StreamServ: inst.Engine.StreamServer(),
+		MetaMgr:    inst.MetaMgr,
+		RemotesMgr: inst.RemotesMgr,
+		ThumbMgr:   inst.ThumbMgr,
+		CertMgr:    inst.CertMgr,
 	})
 	inst.APIServer = srv
 	go func() { _ = srv.Start() }()

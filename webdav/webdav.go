@@ -1,0 +1,194 @@
+package webdav
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/log"
+	"github.com/krau/SaveAny-Bot/common/utils/fsutil"
+	config "github.com/krau/SaveAny-Bot/config/storage"
+	"github.com/krau/SaveAny-Bot/pkg/enums/ctxkey"
+	storenum "github.com/krau/SaveAny-Bot/pkg/enums/storage"
+	"github.com/krau/SaveAny-Bot/pkg/storagetypes"
+)
+
+type Webdav struct {
+	config config.WebdavStorageConfig
+	client *Client
+	logger *log.Logger
+}
+
+func (w *Webdav) Init(ctx context.Context, cfg config.StorageConfig) error {
+	webdavConfig, ok := cfg.(*config.WebdavStorageConfig)
+	if !ok {
+		return fmt.Errorf("failed to cast webdav config")
+	}
+	if err := webdavConfig.Validate(); err != nil {
+		return err
+	}
+	w.config = *webdavConfig
+	w.logger = log.FromContext(ctx).WithPrefix(fmt.Sprintf("webdav[%s]", w.config.Name))
+	w.client = NewClient(w.config.URL, w.config.Username, w.config.Password, &http.Client{
+		Timeout: time.Hour * 12,
+	})
+	return nil
+}
+
+func (w *Webdav) Type() storenum.StorageType {
+	return storenum.Webdav
+}
+
+func (w *Webdav) Name() string {
+	return w.config.Name
+}
+
+func (w *Webdav) JoinStoragePath(p string) string {
+	return path.Join(w.config.BasePath, p)
+}
+
+func (w *Webdav) Save(ctx context.Context, r io.Reader, storagePath string) error {
+	w.logger.Infof("Saving file to %s", storagePath)
+	candidate := w.JoinStoragePath(storagePath)
+	if overwrite, _ := ctx.Value(ctxkey.OverwriteExisting).(bool); !overwrite {
+		candidate = fsutil.UniquePath(w.config.BasePath, storagePath, func(c string) bool {
+			return w.existsPath(ctx, c)
+		}, 1000)
+	}
+
+	if err := w.client.MkDir(ctx, path.Dir(candidate)); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	if err := w.client.WriteFile(ctx, candidate, r); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	return nil
+}
+
+func (w *Webdav) Exists(ctx context.Context, storagePath string) bool {
+	w.logger.Debugf("Checking if file exists at %s", storagePath)
+	return w.existsPath(ctx, w.JoinStoragePath(storagePath))
+}
+
+func (w *Webdav) existsPath(ctx context.Context, storagePath string) bool {
+	exists, err := w.client.Exists(ctx, storagePath)
+	if err != nil {
+		w.logger.Errorf("Failed to check if file exists at %s: %v", storagePath, err)
+		return false
+	}
+	return exists
+}
+
+// ListFiles implements storage.StorageListable
+func (w *Webdav) ListFiles(ctx context.Context, dirPath string) ([]storagetypes.FileInfo, error) {
+	w.logger.Infof("Listing files in %s", dirPath)
+
+	// Join with base path
+	fullPath := path.Join(w.config.BasePath, dirPath)
+
+	responses, err := w.client.ListDir(ctx, fullPath)
+	if err != nil {
+		w.logger.Errorf("Failed to list directory %s: %v", fullPath, err)
+		return nil, fmt.Errorf("failed to list directory: %w", err)
+	}
+
+	files := make([]storagetypes.FileInfo, 0, len(responses))
+	for _, resp := range responses {
+		// Parse the href to get the file name
+		decodedHref, err := url.PathUnescape(resp.Href)
+		if err != nil {
+			w.logger.Warnf("Failed to unescape href %q: %v; using original value", resp.Href, err)
+			decodedHref = resp.Href
+		}
+
+		// Extract filename from href
+		name := path.Base(strings.TrimSuffix(decodedHref, "/"))
+		if name == "" || name == "." {
+			continue
+		}
+
+		// Parse modification time
+		var modTime time.Time
+		if resp.Propstat.Prop.GetLastModified != "" {
+			// Try RFC1123 format (standard for WebDAV)
+			parsedTime, err := time.Parse(time.RFC1123, resp.Propstat.Prop.GetLastModified)
+			if err != nil {
+				w.logger.Warnf("Failed to parse last modified time %q for %s: %v", resp.Propstat.Prop.GetLastModified, decodedHref, err)
+			} else {
+				modTime = parsedTime
+			}
+		}
+
+		isDir := resp.Propstat.Prop.ResourceType.IsCollection()
+
+		fileInfo := storagetypes.FileInfo{
+			Name:    name,
+			Path:    path.Join(dirPath, name),
+			Size:    resp.Propstat.Prop.GetContentLength,
+			IsDir:   isDir,
+			ModTime: modTime,
+		}
+
+		files = append(files, fileInfo)
+	}
+
+	w.logger.Debugf("Found %d files/directories in %s", len(files), dirPath)
+	return files, nil
+}
+
+// OpenFile implements storage.StorageReadable
+func (w *Webdav) OpenFile(ctx context.Context, filePath string) (io.ReadCloser, int64, error) {
+	w.logger.Infof("Opening file %s", filePath)
+
+	// Join with base path
+	fullPath := path.Join(w.config.BasePath, filePath)
+
+	reader, size, err := w.client.ReadFile(ctx, fullPath)
+	if err != nil {
+		w.logger.Errorf("Failed to open file %s: %v", fullPath, err)
+		return nil, 0, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	w.logger.Debugf("Opened file %s (size: %d bytes)", filePath, size)
+	return reader, size, nil
+}
+
+// Delete deletes a file or directory at storagePath.
+func (w *Webdav) Delete(ctx context.Context, storagePath string) error {
+	w.logger.Infof("Deleting %s", storagePath)
+	fullPath := w.JoinStoragePath(storagePath)
+	return w.client.Delete(ctx, fullPath)
+}
+
+// Rename moves or renames a file or directory.
+func (w *Webdav) Rename(ctx context.Context, oldPath, newPath string) error {
+	w.logger.Infof("Renaming from %s to %s", oldPath, newPath)
+	return w.client.Move(ctx, w.JoinStoragePath(oldPath), w.JoinStoragePath(newPath))
+}
+
+// Mkdir creates a directory at dirPath.
+func (w *Webdav) Mkdir(ctx context.Context, dirPath string) error {
+	w.logger.Infof("Creating directory %s", dirPath)
+	return w.client.MkDir(ctx, w.JoinStoragePath(dirPath))
+}
+
+// Stat retrieves metadata about storagePath.
+func (w *Webdav) Stat(ctx context.Context, storagePath string) (*storagetypes.FileInfo, error) {
+	w.logger.Debugf("Stat %s", storagePath)
+	return w.client.Stat(ctx, w.JoinStoragePath(storagePath))
+}
+
+// Client returns the underlying WebDAV client.
+func (w *Webdav) Client() *Client {
+	return w.client
+}
+
+// FS returns a virtual filesystem interface (vfs.FileSystem) backed by this Webdav storage.
+func (w *Webdav) FS() *WebDAVFS {
+	return NewWebDAVFS(w.client, w.config.BasePath)
+}

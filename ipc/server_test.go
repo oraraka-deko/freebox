@@ -60,6 +60,34 @@ func (c *testClient) call(method string, params any) map[string]any {
 	}
 }
 
+func (c *testClient) callRaw(method string, params any) any {
+	c.t.Helper()
+	id := c.next
+	c.next++
+	paramsRaw, err := json.Marshal(params)
+	if err != nil {
+		c.t.Fatalf("marshal params: %v", err)
+	}
+	req := Request{JSONRPC: "2.0", ID: id, Method: method, Params: paramsRaw}
+	if err := WriteFrame(c.nc, req); err != nil {
+		c.t.Fatalf("write request: %v", err)
+	}
+
+	for {
+		var resp Response
+		if err := ReadFrame(c.r, &resp); err != nil {
+			c.t.Fatalf("read response: %v", err)
+		}
+		if resp.ID == nil {
+			continue // skip notifications
+		}
+		if resp.Error != nil {
+			c.t.Fatalf("%s failed: %s", method, resp.Error.Message)
+		}
+		return resp.Result
+	}
+}
+
 func (c *testClient) readNotification() Response {
 	c.t.Helper()
 	for {

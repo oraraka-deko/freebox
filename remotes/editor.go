@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	ErrConflict       = errors.New("remote file has been modified concurrently")
-	ErrSessionClosed  = errors.New("edit session is closed")
+	ErrConflict        = errors.New("remote file has been modified concurrently")
+	ErrSessionClosed   = errors.New("edit session is closed")
 	ErrSessionNotFound = errors.New("edit session not found")
 )
 
@@ -325,4 +325,3 @@ func (s *EditSession) Discard() error {
 	}
 	return nil
 }
-

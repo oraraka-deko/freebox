@@ -14,10 +14,11 @@ import (
 
 	"freebox/ftp"
 	"freebox/gdrive"
-	"freebox/http"
+	"freebox/s3"
 	"freebox/ssh"
 	"freebox/storage"
 	"freebox/vfs"
+	"freebox/webdav"
 )
 
 var (
@@ -249,8 +250,41 @@ func (m *Manager) TestConnection(cfg RemoteConfig) (bool, error) {
 		if cfg.URL == "" {
 			return false, errors.New("webdav URL required")
 		}
-		// Simple reachability check
-		return true, nil
+		client := webdav.NewClient(cfg.URL, cfg.Username, cfg.Password, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return client.Exists(ctx, "/")
+	case TypeS3:
+		endpoint := cfg.Endpoint
+		if endpoint == "" && cfg.URL != "" {
+			endpoint = cfg.URL
+		}
+		if endpoint == "" {
+			return false, errors.New("s3 endpoint required")
+		}
+		bucket := cfg.Bucket
+		if bucket == "" {
+			bucket = cfg.Options["bucket"]
+		}
+		if bucket == "" {
+			return false, errors.New("s3 bucket required")
+		}
+		s3cfg := s3.S3Config{
+			Endpoint:        endpoint,
+			Region:          cfg.Region,
+			BucketName:      bucket,
+			AccessKeyID:     cfg.Username,
+			SecretAccessKey: cfg.Password,
+			UseSSL:          strings.HasPrefix(endpoint, "https://"),
+			PathStyle:       cfg.Options["path_style"] == "true" || cfg.Options["path_style"] == "1",
+		}
+		fsys, err := s3.NewS3FSFromConfig(s3cfg)
+		if err != nil {
+			return false, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return fsys.Client().BucketExists(ctx, bucket)
 	case TypeFTP:
 		addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 		if cfg.Port == 0 {
@@ -398,8 +432,32 @@ func (m *Manager) mountInternal(cfg RemoteConfig) error {
 	case TypeMemory:
 		fsys = vfs.NewMemFS()
 	case TypeWebDAV:
-		client := http.NewWebDAVClient(cfg.URL, cfg.Username, cfg.Password, 30*time.Second)
-		fsys = vfs.NewWebDAVAdapter(client)
+		client := webdav.NewClient(cfg.URL, cfg.Username, cfg.Password, nil)
+		fsys = webdav.NewWebDAVFS(client, cfg.Path)
+	case TypeS3:
+		endpoint := cfg.Endpoint
+		if endpoint == "" && cfg.URL != "" {
+			endpoint = cfg.URL
+		}
+		bucket := cfg.Bucket
+		if bucket == "" {
+			bucket = cfg.Options["bucket"]
+		}
+		s3cfg := s3.S3Config{
+			Endpoint:        endpoint,
+			Region:          cfg.Region,
+			BucketName:      bucket,
+			AccessKeyID:     cfg.Username,
+			SecretAccessKey: cfg.Password,
+			BasePath:        cfg.Path,
+			UseSSL:          strings.HasPrefix(endpoint, "https://"),
+			PathStyle:       cfg.Options["path_style"] == "true" || cfg.Options["path_style"] == "1",
+		}
+		var err error
+		fsys, err = s3.NewS3FSFromConfig(s3cfg)
+		if err != nil {
+			return fmt.Errorf("s3 mount error: %w", err)
+		}
 	case TypeGDrive, TypeGoogleDrive:
 		authCfg := gdrive.AuthConfig{
 			ClientID:        cfg.Options["client_id"],
@@ -425,7 +483,7 @@ func (m *Manager) mountInternal(cfg RemoteConfig) error {
 
 	// If a custom root path is provided (e.g. /path/we/want) and not TypeLocal (which already roots at cfg.Path),
 	// wrap with SubFS so /path/we/want acts as the virtual root /
-	if cfg.Path != "" && cfg.Path != "/" && cfg.Type != TypeLocal && cfg.Type != TypeGDrive && cfg.Type != TypeGoogleDrive {
+	if cfg.Path != "" && cfg.Path != "/" && cfg.Type != TypeLocal && cfg.Type != TypeGDrive && cfg.Type != TypeGoogleDrive && cfg.Type != TypeWebDAV && cfg.Type != TypeS3 {
 		fsys = vfs.NewSubFS(fsys, cfg.Path)
 	}
 
@@ -449,4 +507,3 @@ func (m *Manager) mountInternal(cfg RemoteConfig) error {
 		},
 	})
 }
-

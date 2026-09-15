@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"freebox/api"
+	"freebox/aria2"
 	"freebox/auth"
 	"freebox/cert"
 	"freebox/engine"
@@ -29,14 +30,14 @@ type InstanceConfig struct {
 // Unlike the old FFI bridge, there is exactly one Instance per process --
 // the daemon is the unit of isolation, not a handle map.
 type Instance struct {
-	Engine      *engine.Engine
-	DB          *storage.DB
-	AuthMgr     *auth.Manager
-	Mounts      *vfs.Registry
-	ThumbMgr    *thumbnail.Engine
-	MetaMgr     *meta.Manager
-	RemotesMgr  *remotes.Manager
-	CertMgr     *cert.Manager
+	Engine     *engine.Engine
+	DB         *storage.DB
+	AuthMgr    *auth.Manager
+	Mounts     *vfs.Registry
+	ThumbMgr   *thumbnail.Engine
+	MetaMgr    *meta.Manager
+	RemotesMgr *remotes.Manager
+	CertMgr    *cert.Manager
 
 	// APIServer is the optional legacy REST/WebSocket server, started
 	// independently of the IPC socket for backward compatibility.
@@ -47,6 +48,9 @@ type Instance struct {
 
 	serversMu sync.RWMutex
 	servers   map[string]io.Closer
+
+	aria2Mu     sync.RWMutex
+	aria2Client *aria2.Client
 }
 
 // NewInstance opens the DB and assembles all managers, mirroring the old
@@ -104,16 +108,16 @@ func NewInstance(cfg InstanceConfig) (*Instance, error) {
 	})
 
 	inst := &Instance{
-		Engine:      eng,
-		DB:          db,
-		AuthMgr:     authMgr,
-		Mounts:      reg,
-		ThumbMgr:    thumbMgr,
-		MetaMgr:     meta.NewManager(db),
-		RemotesMgr:  remotes.NewManager(db, reg),
-		CertMgr:     cert.NewManager(db),
-		Transfers:   newTransferManager(),
-		servers:     make(map[string]io.Closer),
+		Engine:     eng,
+		DB:         db,
+		AuthMgr:    authMgr,
+		Mounts:     reg,
+		ThumbMgr:   thumbMgr,
+		MetaMgr:    meta.NewManager(db),
+		RemotesMgr: remotes.NewManager(db, reg),
+		CertMgr:    cert.NewManager(db),
+		Transfers:  newTransferManager(),
+		servers:    make(map[string]io.Closer),
 	}
 	return inst, nil
 }
@@ -165,4 +169,26 @@ func (inst *Instance) Close() {
 	if inst.DB != nil {
 		_ = inst.DB.Close()
 	}
+}
+
+// SetAria2Client sets the default aria2 client for the Instance.
+func (inst *Instance) SetAria2Client(client *aria2.Client) {
+	inst.aria2Mu.Lock()
+	defer inst.aria2Mu.Unlock()
+	inst.aria2Client = client
+}
+
+// GetAria2Client returns an aria2 client. If url is non-empty, a new client is created.
+// Otherwise, the configured instance client is returned, falling back to localhost:6800.
+func (inst *Instance) GetAria2Client(url, secret string) (*aria2.Client, error) {
+	if url != "" {
+		return aria2.NewClient(url, secret)
+	}
+	inst.aria2Mu.RLock()
+	c := inst.aria2Client
+	inst.aria2Mu.RUnlock()
+	if c != nil {
+		return c, nil
+	}
+	return aria2.NewClient("http://localhost:6800/jsonrpc", secret)
 }
